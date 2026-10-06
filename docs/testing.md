@@ -21,6 +21,8 @@ swift test --package-path Packages/Core --filter LocalPickerEvidenceTests
 
 Tests that need private captures or a local model are disabled unless their environment variables are provided. A passing default suite does not imply those optional checks ran.
 
+The retry regression supplies an already recognized title so it does not require Vision OCR on the hosted runner. The concurrency regression uses explicit completion gates rather than elapsed time to check slot refilling and result order.
+
 ## CI
 
 [The workflow](../.github/workflows/ci.yml) runs on pushes, pull requests and manual dispatch. It runs both package suites and compiles the app with signing disabled.
