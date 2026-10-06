@@ -24,6 +24,7 @@ struct ResultsView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .transaction { if reduceMotion { $0.animation = nil } }
     }
 
     @ViewBuilder
@@ -42,7 +43,7 @@ struct ResultsView: View {
                     )
                         .frame(width: imageSize.width, height: imageSize.height)
                         .modifier(PreviewImageChrome())
-                        .transition(.opacity)
+                        .transition(reduceMotion ? .identity : .opacity)
                 }
 
                 if shouldShowScreenshotPreview {
@@ -51,11 +52,11 @@ struct ResultsView: View {
                 } else if model.analysisPreviewFrames.isEmpty {
                     ProgressView()
                         .tint(StillsetStyle.accent)
-                        .transition(.opacity)
+                        .transition(reduceMotion ? .identity : .opacity)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .animation(.easeInOut(duration: 0.4), value: isShowingFrameAnalysis)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.4), value: isShowingFrameAnalysis)
         }
     }
 
@@ -73,7 +74,7 @@ struct ResultsView: View {
             HStack(spacing: 5) {
                 Text(count.formatted())
                     .monospacedDigit()
-                    .contentTransition(.numericText())
+                    .contentTransition(reduceMotion ? .identity : .numericText())
                 if model.showsUniqueScreens && !model.isAnalyzing {
                     Text("écran\(count == 1 ? "" : "s") unique\(count == 1 ? "" : "s")")
                 } else {
@@ -129,7 +130,6 @@ struct ResultsView: View {
     }
 
     private var progressFooter: some View {
-        let fraction = model.isAnalyzing && model.progress.stage == .exporting ? 1 : model.progress.fraction
         return VStack {
             if model.isWorking {
                 VStack(spacing: 7) {
@@ -148,7 +148,7 @@ struct ResultsView: View {
                             Text("\(model.screenshots.count) sur \(model.detectedScreens.count)")
                                 .monospacedDigit()
                         } else if !model.isAnalyzing {
-                            Text(fraction.formatted(.percent.precision(.fractionLength(0))))
+                            Text(model.progress.fraction.formatted(.percent.precision(.fractionLength(0))))
                                 .monospacedDigit()
                                 .foregroundStyle(StillsetStyle.accent)
                         }
@@ -162,10 +162,10 @@ struct ResultsView: View {
                     .foregroundStyle(StillsetStyle.muted)
 
                     ProgressRail(
-                        value: fraction,
+                        progress: model.progress,
                         screens: model.isAnalyzing ? model.detectedScreens : [],
                         duration: model.analysisDuration,
-                        readyCount: model.screenshots.count
+                        capturedIDs: Set(model.screenshots.map(\.id))
                     )
                 }
                 .frame(maxWidth: 420)
@@ -182,7 +182,7 @@ struct ResultsView: View {
                 HStack(spacing: 8) {
                     Text(notice)
                         .foregroundStyle(StillsetStyle.muted)
-                        .transition(.opacity)
+                        .transition(reduceMotion ? .identity : .opacity)
 
                     if model.exportedFolderURL != nil {
                         Button("Afficher dans le Finder", action: model.showExportedFolder)
@@ -196,8 +196,8 @@ struct ResultsView: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: 58)
-        .animation(.easeInOut(duration: 0.24), value: model.isWorking)
-        .animation(.easeInOut(duration: 0.24), value: model.notice)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: model.isWorking)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: model.notice)
     }
 
     private var timeline: some View {
@@ -237,7 +237,7 @@ struct ResultsView: View {
                             }
                         .help(screen.map { "Écran \($0.screenID) · \($0.name) · \(screenshot.state.representativeTimestamp.stillsetTimecode)" } ?? screenshot.state.representativeTimestamp.stillsetTimecode)
                         .id(screenshot.id)
-                        .transition(.opacity)
+                        .transition(reduceMotion ? .identity : .opacity)
                     }
                 }
                 .padding(.horizontal, 24)
@@ -320,7 +320,12 @@ private struct PhotoStackPreview: View {
             }
 
             if let screenshot = model.focusedScreenshot {
-                ScreenshotPreview(url: screenshot.fileURL, maxPixelSize: 1400)
+                ScreenshotPreview(
+                    url: screenshot.fileURL,
+                    maxPixelSize: 1400,
+                    occurrenceID: screenshot.id,
+                    animatesCaptureArrival: model.isAnalyzing && model.followsLatest
+                )
                     .frame(width: width, height: height)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay {
@@ -332,7 +337,7 @@ private struct PhotoStackPreview: View {
                         if selectedCount > 1 {
                             Text("\(selectedCount)")
                                 .font(.system(size: 12, weight: .semibold))
-                                .contentTransition(.numericText())
+                                .contentTransition(reduceMotion ? .identity : .numericText())
                                 .foregroundStyle(.white)
                                 .frame(width: 28, height: 28)
                                 .background(StillsetStyle.accent, in: Circle())
@@ -395,15 +400,35 @@ private struct PreviewImageChrome: ViewModifier {
 }
 
 private struct ProgressRail: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    let value: Double
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    let progress: AnalysisProgress
     var screens: [UIState] = []
     var duration: TimeInterval = 0
-    var readyCount: Int = 0
+    var capturedIDs: Set<UUID> = []
+    var reducesMotionInPreview = false
+
+    private var reduceMotion: Bool {
+        systemReduceMotion || reducesMotionInPreview
+    }
+
+    private var stageFraction: Double {
+        progress.fraction.isFinite ? min(1, max(0, progress.fraction)) : 0
+    }
+
+    private var temporalFraction: Double {
+        guard !screens.isEmpty else { return stageFraction }
+        switch progress.stage {
+        case .exporting, .annotating, .complete:
+            return 1
+        default:
+            return stageFraction
+        }
+    }
 
     var body: some View {
+        let fraction = temporalFraction
+        let readyCount = screens.filter { capturedIDs.contains($0.id) }.count
         GeometryReader { geometry in
-            let fraction = min(1, max(0, value))
             ZStack(alignment: .leading) {
                 Capsule()
                     .fill(StillsetStyle.ink.opacity(0.12))
@@ -414,54 +439,138 @@ private struct ProgressRail: View {
                     .frame(width: geometry.size.width * fraction, height: 4)
                     .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: fraction)
 
-                ForEach(Array(screens.enumerated()), id: \.element.id) { index, screen in
-                    let position = duration > 0 ? min(1, max(0, screen.representativeTimestamp / duration)) : 0
-                    Circle()
-                        .fill(index < readyCount ? StillsetStyle.accent : StillsetStyle.surface)
-                        .overlay { Circle().strokeBorder(StillsetStyle.accent, lineWidth: 1.5) }
-                        .frame(width: 10, height: 10)
-                        .offset(x: max(0, min(geometry.size.width - 10, geometry.size.width * position - 5)))
-                        .transition(.opacity)
+                ForEach(screens) { screen in
+                    let isCaptured = capturedIDs.contains(screen.id)
+                    ProgressRailMarker(isCaptured: isCaptured, reduceMotion: reduceMotion)
+                        .position(x: markerPosition(screen, width: geometry.size.width), y: geometry.size.height / 2)
+                        .transition(reduceMotion ? .identity : .opacity)
+                        .zIndex(isCaptured ? 0 : 1)
                 }
 
-                Circle()
-                    .fill(StillsetStyle.accent)
-                    .frame(width: 6, height: 6)
-                    .offset(x: max(0, min(geometry.size.width - 6, geometry.size.width * fraction - 3)))
-                    .opacity(fraction > 0 && fraction < 1 ? 1 : 0)
-                    .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: fraction)
+                if progress.stage == .decoding && fraction > 0 && fraction < 1 {
+                    Circle()
+                        .fill(StillsetStyle.accent)
+                        .frame(width: 6, height: 6)
+                        .background {
+                            Circle()
+                                .fill(StillsetStyle.accent.opacity(0.12))
+                                .frame(width: 10, height: 10)
+                        }
+                        .offset(x: max(0, min(geometry.size.width - 6, geometry.size.width * fraction - 3)))
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: fraction)
+                        .zIndex(2)
+                }
             }
             .frame(maxHeight: .infinity)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: screens.count)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: readyCount)
         }
         .frame(height: 18)
+        .transaction { if reduceMotion { $0.animation = nil } }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Progression")
-        .accessibilityValue("\(Int(min(1, max(0, value)) * 100)) %, \(screens.count) écrans détectés, \(min(readyCount, screens.count)) captures prêtes")
+        .accessibilityValue("\(Int(stageFraction * 100)) %, \(screens.count) écrans détectés, \(readyCount) captures prêtes")
+    }
+
+    private func markerPosition(_ screen: UIState, width: CGFloat) -> CGFloat {
+        let position = duration.isFinite && duration > 0 && screen.representativeTimestamp.isFinite
+            ? min(1, max(0, screen.representativeTimestamp / duration)) : 0
+        let inset = min(8, width / 2)
+        return min(width - inset, max(inset, width * position))
+    }
+}
+
+private struct ProgressRailMarker: View {
+    let isCaptured: Bool
+    let reduceMotion: Bool
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: isCaptured ? 2.5 : 5, style: .continuous)
+            .fill(StillsetStyle.surface)
+            .overlay {
+                RoundedRectangle(cornerRadius: isCaptured ? 2.5 : 5, style: .continuous)
+                    .strokeBorder(StillsetStyle.accent, lineWidth: 1.5)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 1, style: .continuous)
+                    .fill(StillsetStyle.accent.opacity(0.18))
+                    .frame(width: 6, height: 8)
+                    .offset(y: -1.5)
+                    .opacity(isCaptured ? 1 : 0)
+            }
+            .frame(width: isCaptured ? 12 : 10, height: isCaptured ? 16 : 10)
+            .frame(width: 16, height: 16)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: isCaptured)
     }
 }
 
 #Preview("Progression · clair et sombre") {
-    let screens = [0.12, 0.3, 0.38].map { timestamp in
+    ProgressRailPreview()
+}
+
+#Preview("Progression · mouvement réduit") {
+    ProgressRailPreview(reducedMotion: true)
+}
+
+private struct ProgressRailPreview: View {
+    var reducedMotion = false
+
+    private static let sparse = [0, 0.16, 0.5, 0.78, 1].map { timestamp in
         UIState(interval: timestamp..<(timestamp + 0.04), representativeTimestamp: timestamp, stabilityScore: 1)
     }
-    VStack(spacing: 0) {
-        ForEach([ColorScheme.light, .dark], id: \.self) { scheme in
-            VStack(spacing: 20) {
-                ProgressRail(value: 0)
-                ProgressRail(value: 0.6, screens: screens, duration: 1)
-                ProgressRail(value: 1, screens: screens, duration: 1, readyCount: screens.count)
-            }
-            .padding(28)
-            .background(StillsetStyle.surface)
-            .environment(\.colorScheme, scheme)
-        }
+
+    private static let dense = (0..<24).map { index in
+        let timestamp = 0.4 + Double(index) * 0.007
+        return UIState(interval: timestamp..<(timestamp + 0.004), representativeTimestamp: timestamp, stabilityScore: 1)
     }
-    .frame(width: 540)
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach([ColorScheme.light, .dark], id: \.self) { scheme in
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Recherche · repères espacés")
+                    ProgressRail(
+                        progress: AnalysisProgress(stage: .decoding, fraction: 0.63, detail: "Recherche d’écrans"),
+                        screens: Self.sparse, duration: 1, reducesMotionInPreview: reducedMotion
+                    )
+                    Text("Captures · ordre indépendant")
+                    ProgressRail(
+                        progress: AnalysisProgress(stage: .exporting, fraction: 0.4, detail: "Création des captures"),
+                        screens: Self.sparse, duration: 1,
+                        capturedIDs: [Self.sparse[0].id, Self.sparse[3].id],
+                        reducesMotionInPreview: reducedMotion
+                    )
+                    Text("Repérage · rail temporel complet")
+                    ProgressRail(
+                        progress: AnalysisProgress(stage: .annotating, fraction: 0.35, detail: "Repérage des écrans"),
+                        screens: Self.sparse, duration: 1,
+                        capturedIDs: Set(Self.sparse.map(\.id)), reducesMotionInPreview: reducedMotion
+                    )
+                    Text("Captures · repères rapprochés")
+                    ProgressRail(
+                        progress: AnalysisProgress(stage: .exporting, fraction: 0.5, detail: "Création des captures"),
+                        screens: Self.dense, duration: 1,
+                        capturedIDs: Set(Self.dense.enumerated().filter { $0.offset.isMultiple(of: 2) }.map { $0.element.id }),
+                        reducesMotionInPreview: reducedMotion
+                    )
+                    Text("Export de la sélection")
+                    ProgressRail(
+                        progress: AnalysisProgress(stage: .exporting, fraction: 0.35, detail: "Export de la sélection"),
+                        reducesMotionInPreview: reducedMotion
+                    )
+                }
+                .font(.caption)
+                .foregroundStyle(StillsetStyle.muted)
+                .padding(28)
+                .background(StillsetStyle.surface)
+                .environment(\.colorScheme, scheme)
+            }
+        }
+        .frame(width: 540)
+    }
 }
 
 private struct AnalysisFramePreview: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let frames: [Frame]
     let startedAt: Date
     let isAnimating: Bool
@@ -469,21 +578,22 @@ private struct AnalysisFramePreview: View {
     @State private var lastDisplayedFrameTimestamp: TimeInterval?
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 8.0, paused: !isAnimating || frames.count < 2)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 8.0, paused: reduceMotion || !isAnimating || frames.count < 2)) { context in
             if !frames.isEmpty {
                 let elapsed = max(0, context.date.timeIntervalSince(startedAt))
                 let index = Int(elapsed / 0.14) % frames.count
-                let frame = isAnimating
+                let fallbackFrame = frames[reduceMotion ? 0 : index]
+                let frame = isAnimating && !reduceMotion
                     ? frames[index]
-                    : frames.first { $0.timestamp == lastDisplayedFrameTimestamp } ?? frames[index]
+                    : frames.first { $0.timestamp == lastDisplayedFrameTimestamp } ?? fallbackFrame
                 if let image = makeImage(frame) {
                     Image(decorative: image, scale: 1)
                         .resizable()
                         .scaledToFit()
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .transition(.opacity)
+                        .transition(reduceMotion ? .identity : .opacity)
                         .id(frame.timestamp)
-                        .animation(.easeInOut(duration: 0.22), value: frame.timestamp)
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: frame.timestamp)
                         .onAppear { lastDisplayedFrameTimestamp = frame.timestamp }
                         .onChange(of: frame.timestamp) {
                             lastDisplayedFrameTimestamp = frame.timestamp
