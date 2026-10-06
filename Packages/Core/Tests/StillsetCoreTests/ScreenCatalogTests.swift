@@ -146,13 +146,10 @@ struct ScreenCatalogTests {
         #expect(changed.classifications[0].stateID != changed.classifications[1].stateID)
     }
 
-    @Test func retriesTransientErrorsOnceAndUsesVisionAfterFailure() async throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: folder) }
-        let home = try screenshot(title: "Accueil", offset: 0, folder: folder)
+    @Test func retriesTransientErrorsOnceAndUsesRecognizedTitleAfterFailure() async throws {
+        let home = URL(fileURLWithPath: "/stillset-missing-file.png")
         let attempts = AttemptCount()
-        let result = try await ScreenSemanticNamer.nameWithFallback(home) {
+        let result = try await ScreenSemanticNamer.nameWithFallback(home, recognizedTitle: "Accueil") {
             await attempts.record()
             throw LanguageModelError.timeout(.init(debugDescription: "Temporary"))
         }
@@ -161,7 +158,7 @@ struct ScreenCatalogTests {
         #expect(result.usedVision)
         #expect(result.error == nil)
         let refusal = AttemptCount()
-        let refused = try await ScreenSemanticNamer.nameWithFallback(home) {
+        let refused = try await ScreenSemanticNamer.nameWithFallback(home, recognizedTitle: "Accueil") {
             await refusal.record()
             throw LanguageModelError.guardrailViolation(.init(debugDescription: "Blocked"))
         }
@@ -380,11 +377,12 @@ struct ScreenCatalogTests {
         #expect(await attempts.value == 2)
     }
 
-    @Test func rollingWorkKeepsTwoSlotsBusyAndRestoresInputOrder() async throws {
+    @Test(.timeLimit(.minutes(1))) func rollingWorkKeepsTwoSlotsBusyAndRestoresInputOrder() async throws {
         let work = CatalogWork()
         let values = try await ScreenCatalogAnalyzer.concurrentMap([0, 1, 2, 3]) { index in
             await work.begin(String(index))
-            try await Task.sleep(for: .milliseconds(index == 0 ? 80 : 10))
+            if index == 0 { await work.waitForOtherCalls() }
+            try Task.checkCancellation()
             await work.end(String(index))
             return index
         }
@@ -489,19 +487,29 @@ private actor AttemptCount {
 }
 
 private actor CatalogWork {
-    private(set) var calls: [String] = []
     private(set) var peak = 0
     private(set) var completed: [String] = []
     private var active = 0
+    private let firstStarted = AsyncStream<Void>.makeStream()
+    private let otherCallsFinished = AsyncStream<Void>.makeStream()
 
-    func begin(_ call: String) {
-        calls.append(call)
+    func begin(_ call: String) async {
+        if call == "1" {
+            for await _ in firstStarted.stream {}
+        }
         active += 1
         peak = max(peak, active)
+        if call == "0" { firstStarted.continuation.finish() }
+    }
+
+    func waitForOtherCalls() async {
+        // Keep the first slot occupied while the second processes every remaining input.
+        for await _ in otherCallsFinished.stream {}
     }
 
     func end(_ call: String) {
         completed.append(call)
         active -= 1
+        if completed.count == 3 { otherCallsFinished.continuation.finish() }
     }
 }
