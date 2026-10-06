@@ -1,7 +1,9 @@
 import CoreGraphics
 import Foundation
+import ImageIO
 import StillsetCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ResultsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -163,9 +165,11 @@ struct ResultsView: View {
 
                     ProgressRail(
                         progress: model.progress,
+                        isAnalyzing: model.isAnalyzing,
                         screens: model.isAnalyzing ? model.detectedScreens : [],
                         duration: model.analysisDuration,
-                        capturedIDs: Set(model.screenshots.map(\.id))
+                        screenshots: model.screenshots,
+                        videoAspectRatio: videoAspectRatio
                     )
                 }
                 .frame(maxWidth: 420)
@@ -195,7 +199,7 @@ struct ResultsView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 58)
+        .frame(height: model.isAnalyzing ? 84 : 58)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: model.isWorking)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: model.notice)
     }
@@ -402,9 +406,11 @@ private struct PreviewImageChrome: ViewModifier {
 private struct ProgressRail: View {
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     let progress: AnalysisProgress
+    var isAnalyzing = false
     var screens: [UIState] = []
     var duration: TimeInterval = 0
-    var capturedIDs: Set<UUID> = []
+    var screenshots: [CapturedScreenshot] = []
+    var videoAspectRatio: CGFloat = 9.0 / 19.0
     var reducesMotionInPreview = false
 
     private var reduceMotion: Bool {
@@ -427,24 +433,36 @@ private struct ProgressRail: View {
 
     var body: some View {
         let fraction = temporalFraction
-        let readyCount = screens.filter { capturedIDs.contains($0.id) }.count
+        let capturesByID = Dictionary(uniqueKeysWithValues: screenshots.map { ($0.id, $0) })
+        let readyCount = screens.filter { capturesByID[$0.id] != nil }.count
         GeometryReader { geometry in
+            let layout = ProgressRailLayout(
+                screens: screens, duration: duration, width: geometry.size.width, aspectRatio: videoAspectRatio
+            )
             ZStack(alignment: .leading) {
                 Capsule()
                     .fill(StillsetStyle.ink.opacity(0.12))
-                    .frame(height: 4)
+                    .frame(width: layout.trackWidth, height: 4)
+                    .offset(x: layout.inset)
 
                 Capsule()
                     .fill(StillsetStyle.accent)
-                    .frame(width: geometry.size.width * fraction, height: 4)
+                    .frame(width: layout.trackWidth * fraction, height: 4)
+                    .offset(x: layout.inset)
                     .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: fraction)
 
                 ForEach(screens) { screen in
-                    let isCaptured = capturedIDs.contains(screen.id)
-                    ProgressRailMarker(isCaptured: isCaptured, reduceMotion: reduceMotion)
-                        .position(x: markerPosition(screen, width: geometry.size.width), y: geometry.size.height / 2)
+                    let screenshot = capturesByID[screen.id]
+                    ProgressRailMarker(
+                        id: screen.id,
+                        screenshot: screenshot,
+                        canExpand: layout.eligibleIDs.contains(screen.id),
+                        targetSize: layout.targetSize,
+                        reduceMotion: reduceMotion
+                    )
+                        .position(x: layout.centers[screen.id] ?? layout.inset, y: geometry.size.height / 2)
                         .transition(reduceMotion ? .identity : .opacity)
-                        .zIndex(isCaptured ? 0 : 1)
+                        .zIndex(screenshot == nil ? 1 : 0)
                 }
 
                 if progress.stage == .decoding && fraction > 0 && fraction < 1 {
@@ -456,50 +474,125 @@ private struct ProgressRail: View {
                                 .fill(StillsetStyle.accent.opacity(0.12))
                                 .frame(width: 10, height: 10)
                         }
-                        .offset(x: max(0, min(geometry.size.width - 6, geometry.size.width * fraction - 3)))
+                        .position(x: layout.inset + layout.trackWidth * fraction, y: geometry.size.height / 2)
                         .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: fraction)
                         .zIndex(2)
                 }
             }
-            .frame(maxHeight: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: screens.count)
         }
-        .frame(height: 18)
+        .frame(height: isAnalyzing ? 56 : 18)
         .transaction { if reduceMotion { $0.animation = nil } }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Progression")
         .accessibilityValue("\(Int(stageFraction * 100)) %, \(screens.count) écrans détectés, \(readyCount) captures prêtes")
     }
+}
 
-    private func markerPosition(_ screen: UIState, width: CGFloat) -> CGFloat {
-        let position = duration.isFinite && duration > 0 && screen.representativeTimestamp.isFinite
-            ? min(1, max(0, screen.representativeTimestamp / duration)) : 0
-        let inset = min(8, width / 2)
-        return min(width - inset, max(inset, width * position))
+private struct ProgressRailLayout {
+    let targetSize: CGSize
+    let inset: CGFloat
+    let trackWidth: CGFloat
+    let centers: [UUID: CGFloat]
+    let eligibleIDs: Set<UUID>
+
+    init(screens: [UIState], duration: TimeInterval, width: CGFloat, aspectRatio: CGFloat) {
+        let ratio = aspectRatio.isFinite && aspectRatio > 0 ? aspectRatio : 9.0 / 19.0
+        let height = min(52, 40 / ratio)
+        let targetSize = CGSize(width: height * ratio, height: height)
+        let inset = min(targetSize.width / 2, width / 2)
+        let trackWidth = max(0, width - inset * 2)
+        let positions: [(id: UUID, center: CGFloat)] = screens.map { screen in
+            let fraction = duration.isFinite && duration > 0 && screen.representativeTimestamp.isFinite
+                ? min(1, max(0, screen.representativeTimestamp / duration)) : 0
+            return (id: screen.id, center: inset + trackWidth * CGFloat(fraction))
+        }.sorted { $0.center < $1.center }
+        let eligibleIDs = Set(positions.indices.filter { index in
+            width >= targetSize.width
+                && (index == positions.startIndex || positions[index].center - positions[index - 1].center >= targetSize.width + 4)
+                && (index == positions.index(before: positions.endIndex) || positions[index + 1].center - positions[index].center >= targetSize.width + 4)
+        }.map { positions[$0].id })
+        self.targetSize = targetSize
+        self.inset = inset
+        self.trackWidth = trackWidth
+        self.centers = Dictionary(uniqueKeysWithValues: positions.map { ($0.id, $0.center) })
+        self.eligibleIDs = eligibleIDs
     }
 }
 
 private struct ProgressRailMarker: View {
-    let isCaptured: Bool
+    let id: UUID
+    let screenshot: CapturedScreenshot?
+    let canExpand: Bool
+    let targetSize: CGSize
     let reduceMotion: Bool
+    @State private var loadedOccurrenceID: UUID?
+
+    private var isCaptured: Bool {
+        screenshot != nil
+    }
+
+    private var isExpanded: Bool {
+        canExpand && isCaptured && loadedOccurrenceID == id
+    }
+
+    private var markerSize: CGSize {
+        isExpanded ? targetSize : CGSize(width: isCaptured ? 11 : 8, height: isCaptured ? 15 : 11)
+    }
+
+    private var cornerRadius: CGFloat {
+        isExpanded ? 5 : 3
+    }
+
+    private var borderWidth: CGFloat {
+        isExpanded ? 1 : isCaptured ? 1.5 : 1
+    }
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 3, style: .continuous)
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             .fill(StillsetStyle.surface)
-            .overlay {
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .strokeBorder(StillsetStyle.accent.opacity(isCaptured ? 1 : 0.55), lineWidth: isCaptured ? 1.5 : 1)
-            }
+            .frame(width: markerSize.width, height: markerSize.height)
             .overlay {
                 RoundedRectangle(cornerRadius: 1, style: .continuous)
                     .fill(StillsetStyle.accent.opacity(0.18))
                     .frame(width: 5, height: 7)
                     .offset(y: -1)
-                    .opacity(isCaptured ? 1 : 0)
+                    .opacity(isCaptured && !isExpanded ? 1 : 0)
             }
-            .frame(width: isCaptured ? 11 : 8, height: isCaptured ? 15 : 11)
-            .frame(width: 16, height: 16)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: isCaptured)
+            .overlay { thumbnail }
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(StillsetStyle.accent.opacity(isCaptured ? 1 : 0.55), lineWidth: borderWidth)
+            }
+            .shadow(color: .black.opacity(isExpanded ? 0.1 : 0), radius: 3, y: 1)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.28), value: markerSize)
+            .onChange(of: canExpand) { _, canExpand in
+                if !canExpand { loadedOccurrenceID = nil }
+            }
+            .onChange(of: screenshot?.id) { _, capturedID in
+                if capturedID != loadedOccurrenceID { loadedOccurrenceID = nil }
+            }
+    }
+
+    @ViewBuilder
+    private var thumbnail: some View {
+        if canExpand, let screenshot {
+            ScreenshotPreview(
+                url: screenshot.fileURL,
+                maxPixelSize: 104,
+                occurrenceID: id,
+                showsLoadingIndicator: false,
+                usesParentAnimation: true,
+                onImageLoaded: { loadedID in
+                    guard loadedID == id, loadedOccurrenceID != loadedID else { return }
+                    loadedOccurrenceID = loadedID
+                }
+            )
+            .frame(width: targetSize.width, height: targetSize.height)
+            .opacity(isExpanded ? 1 : 0)
+        }
     }
 }
 
@@ -523,6 +616,9 @@ private struct ProgressRailPreview: View {
         return UIState(interval: timestamp..<(timestamp + 0.004), representativeTimestamp: timestamp, stabilityScore: 1)
     }
 
+    private static let sparseCaptures = ProgressRailPreviewImages.captures(for: sparse)
+    private static let denseCaptures = ProgressRailPreviewImages.captures(for: dense)
+
     var body: some View {
         VStack(spacing: 0) {
             ForEach([ColorScheme.light, .dark], id: \.self) { scheme in
@@ -530,26 +626,30 @@ private struct ProgressRailPreview: View {
                     Text("Recherche · repères espacés")
                     ProgressRail(
                         progress: AnalysisProgress(stage: .decoding, fraction: 0.63, detail: "Recherche d’écrans"),
+                        isAnalyzing: true,
                         screens: Self.sparse, duration: 1, reducesMotionInPreview: reducedMotion
                     )
                     Text("Captures · ordre indépendant")
                     ProgressRail(
                         progress: AnalysisProgress(stage: .exporting, fraction: 0.4, detail: "Création des captures"),
+                        isAnalyzing: true,
                         screens: Self.sparse, duration: 1,
-                        capturedIDs: [Self.sparse[0].id, Self.sparse[3].id],
+                        screenshots: [Self.sparseCaptures[3], Self.sparseCaptures[0]],
                         reducesMotionInPreview: reducedMotion
                     )
                     Text("Repérage · rail temporel complet")
                     ProgressRail(
                         progress: AnalysisProgress(stage: .annotating, fraction: 0.35, detail: "Repérage des écrans"),
+                        isAnalyzing: true,
                         screens: Self.sparse, duration: 1,
-                        capturedIDs: Set(Self.sparse.map(\.id)), reducesMotionInPreview: reducedMotion
+                        screenshots: Self.sparseCaptures, reducesMotionInPreview: reducedMotion
                     )
                     Text("Captures · repères rapprochés")
                     ProgressRail(
                         progress: AnalysisProgress(stage: .exporting, fraction: 0.5, detail: "Création des captures"),
+                        isAnalyzing: true,
                         screens: Self.dense, duration: 1,
-                        capturedIDs: Set(Self.dense.enumerated().filter { $0.offset.isMultiple(of: 2) }.map { $0.element.id }),
+                        screenshots: Self.denseCaptures.enumerated().filter { $0.offset.isMultiple(of: 2) }.map(\.element),
                         reducesMotionInPreview: reducedMotion
                     )
                     Text("Export de la sélection")
@@ -566,6 +666,49 @@ private struct ProgressRailPreview: View {
             }
         }
         .frame(width: 540)
+    }
+}
+
+private enum ProgressRailPreviewImages {
+    private static let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("StillsetProgressRailPreview-\(UUID().uuidString)", isDirectory: true)
+
+    static func captures(for screens: [UIState]) -> [CapturedScreenshot] {
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return screens.enumerated().map { index, screen in
+            let url = directory.appendingPathComponent("\(screen.id.uuidString).png")
+            if let image = image(index: index),
+               let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) {
+                CGImageDestinationAddImage(destination, image, nil)
+                _ = CGImageDestinationFinalize(destination)
+            }
+            return CapturedScreenshot(state: screen, fileURL: url)
+        }
+    }
+
+    private static func image(index: Int) -> CGImage? {
+        guard let context = CGContext(
+            data: nil, width: 104, height: 220, bitsPerComponent: 8, bytesPerRow: 104 * 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        let hue = CGFloat(index % 5) / 5
+        context.setFillColor(CGColor(red: 0.92, green: 0.94, blue: 0.97, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 104, height: 220))
+        context.setFillColor(CGColor(red: 0.16 + hue * 0.3, green: 0.35, blue: 0.7 - hue * 0.2, alpha: 1))
+        context.fill(CGRect(x: 0, y: 182, width: 104, height: 38))
+        context.fill(CGRect(x: 8, y: 18, width: 88, height: 12))
+        for row in 0..<4 {
+            let y = CGFloat(142 - row * 34)
+            context.setFillColor(CGColor(gray: 1, alpha: 1))
+            context.fill(CGRect(x: 8, y: y, width: 88, height: 26))
+            context.setFillColor(CGColor(red: 0.35, green: 0.57 + hue * 0.15, blue: 0.78, alpha: 1))
+            context.fill(CGRect(x: 13, y: y + 5, width: 16, height: 16))
+            context.setFillColor(CGColor(gray: 0.55, alpha: 1))
+            context.fill(CGRect(x: 35, y: y + 15, width: CGFloat(40 - (index + row) % 3 * 7), height: 3))
+            context.setFillColor(CGColor(gray: 0.8, alpha: 1))
+            context.fill(CGRect(x: 35, y: y + 8, width: 48, height: 3))
+        }
+        return context.makeImage()
     }
 }
 

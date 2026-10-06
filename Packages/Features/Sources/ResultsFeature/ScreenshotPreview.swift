@@ -6,6 +6,9 @@ struct ScreenshotPreview: View {
     let maxPixelSize: Int
     var occurrenceID: UUID? = nil
     var animatesCaptureArrival = false
+    var showsLoadingIndicator = true
+    var usesParentAnimation = false
+    var onImageLoaded: ((UUID?) -> Void)? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var loadedImage: LoadedImage?
@@ -16,25 +19,19 @@ struct ScreenshotPreview: View {
     }
 
     var body: some View {
-        ZStack {
-            if let loadedImage {
-                Image(decorative: loadedImage.image, scale: 1)
-                    .resizable()
-                    .scaledToFit()
-                    .id(loadedImage.occurrenceID)
-                    .transition(imageTransition)
+        Group {
+            if usesParentAnimation {
+                imageContent
             } else {
-                ProgressView()
-                    .tint(StillsetStyle.accent)
-                    .transition(.identity)
+                imageContent
+                    .animation(
+                        occurrenceID == nil || reduceMotion ? nil : .easeOut(duration: animatesCaptureArrival ? 0.2 : 0.14),
+                        value: loadedImage?.occurrenceID
+                    )
             }
         }
-        .animation(
-            occurrenceID == nil || reduceMotion ? nil : .easeOut(duration: animatesCaptureArrival ? 0.2 : 0.14),
-            value: loadedImage?.occurrenceID
-        )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .transaction { $0.animation = nil }
+        .transaction { if !usesParentAnimation { $0.animation = nil } }
         .task(id: url) {
             let sourceURL = url
             let pixelSize = maxPixelSize
@@ -50,7 +47,25 @@ struct ScreenshotPreview: View {
             }.value
             guard !Task.isCancelled else { return }
             guard let loadedImage else { return }
+            let shouldNotify = self.loadedImage == nil || self.loadedImage?.occurrenceID != imageID
             self.loadedImage = LoadedImage(occurrenceID: imageID, image: loadedImage)
+            if shouldNotify { onImageLoaded?(imageID) }
+        }
+    }
+
+    private var imageContent: some View {
+        ZStack {
+            if let loadedImage {
+                Image(decorative: loadedImage.image, scale: 1)
+                    .resizable()
+                    .scaledToFit()
+                    .id(loadedImage.occurrenceID)
+                    .transition(usesParentAnimation ? .identity : imageTransition)
+            } else if showsLoadingIndicator {
+                ProgressView()
+                    .tint(StillsetStyle.accent)
+                    .transition(.identity)
+            }
         }
     }
 
