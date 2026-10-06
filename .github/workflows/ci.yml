@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    # macOS 27 is required by the Foundation Models image APIs.
+    # https://github.com/actions/runner-images/blob/main/images/macos/xcode-27-arm64-Readme.md
+    runs-on: xcode-27
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v5
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+      - name: Test Core
+        run: swift test --package-path Packages/Core
+      - name: Test Features
+        run: swift test --package-path Packages/Features
+      - name: Build app
+        run: >-
+          xcodebuild -quiet
+          -project Stillset.xcodeproj
+          -scheme Stillset
+          -configuration Debug
+          -destination 'platform=macOS,arch=arm64'
+          -derivedDataPath .build/Xcode
+          CODE_SIGNING_ALLOWED=NO build

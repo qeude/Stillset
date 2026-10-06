@@ -1,0 +1,9 @@
+.build/
+**/.build/
+.swiftpm/
+dist/
+.DS_Store
+xcuserdata/
+*.xcuserstate
+# Private recordings used only for local profiling.
+Packages/Core/Tests/Fixtures/iphone-workflow*.mp4
