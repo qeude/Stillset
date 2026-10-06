@@ -484,20 +484,20 @@ private struct ProgressRailMarker: View {
     let reduceMotion: Bool
 
     var body: some View {
-        RoundedRectangle(cornerRadius: isCaptured ? 2.5 : 5, style: .continuous)
+        RoundedRectangle(cornerRadius: 3, style: .continuous)
             .fill(StillsetStyle.surface)
             .overlay {
-                RoundedRectangle(cornerRadius: isCaptured ? 2.5 : 5, style: .continuous)
-                    .strokeBorder(StillsetStyle.accent, lineWidth: 1.5)
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .strokeBorder(StillsetStyle.accent.opacity(isCaptured ? 1 : 0.55), lineWidth: isCaptured ? 1.5 : 1)
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 1, style: .continuous)
                     .fill(StillsetStyle.accent.opacity(0.18))
-                    .frame(width: 6, height: 8)
-                    .offset(y: -1.5)
+                    .frame(width: 5, height: 7)
+                    .offset(y: -1)
                     .opacity(isCaptured ? 1 : 0)
             }
-            .frame(width: isCaptured ? 12 : 10, height: isCaptured ? 16 : 10)
+            .frame(width: isCaptured ? 11 : 8, height: isCaptured ? 15 : 11)
             .frame(width: 16, height: 16)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: isCaptured)
     }
