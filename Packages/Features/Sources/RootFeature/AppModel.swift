@@ -42,6 +42,18 @@ public final class AppModel {
 
     public init() {}
 
+    #if DEBUG
+    func setPreviewAnalysisRunning(_ running: Bool) {
+        isWorking = running
+        isAnalyzing = running
+        progress = AnalysisProgress(
+            stage: running ? .annotating : .complete,
+            fraction: running ? 0.62 : 1,
+            detail: running ? "Organisation des captures…" : "Captures prêtes"
+        )
+    }
+    #endif
+
     isolated deinit { refinementTask?.cancel() }
 
     public var hasScreenshots: Bool { !screenshots.isEmpty }
@@ -158,7 +170,7 @@ public final class AppModel {
                         await MainActor.run {
                             guard model.isAnalyzing, model.progress.stage == .decoding else { return }
                             let colorPreviews = frames.filter { $0.previewRGBA != nil }
-                            model.analysisPreviewFrames = Array((model.analysisPreviewFrames + colorPreviews).suffix(2)) // ponytail: keep two full-resolution previews in memory; use disk-backed history if longer playback is needed.
+                            model.analysisPreviewFrames = Array((model.analysisPreviewFrames + colorPreviews).suffix(2))
                         }
                     },
                     onDetectedScreens: { screens in
@@ -200,11 +212,11 @@ public final class AppModel {
                 )
                 try Task.checkCancellation()
                 await MainActor.run {
-                    model.progress = AnalysisProgress(stage: .annotating, fraction: 0, detail: "Repérage des écrans…")
+                    model.progress = AnalysisProgress(stage: .annotating, fraction: 0, detail: "Organisation des captures…")
                 }
-                let catalog = try await catalogAnalyzer.analyze(fileURLs: files, useFoundationModels: false) { fraction, detail in
+                let catalog = try await catalogAnalyzer.analyze(fileURLs: files, useFoundationModels: false) { fraction, _ in
                     await MainActor.run {
-                        model.progress = AnalysisProgress(stage: .annotating, fraction: fraction, detail: detail)
+                        model.progress = AnalysisProgress(stage: .annotating, fraction: fraction, detail: "Organisation des captures…")
                     }
                 }
                 let namedFiles = try ScreenshotExporter.prepareNamedFiles(files: files, screenNames: catalog.classifications.map(\.name))
@@ -222,11 +234,10 @@ public final class AppModel {
                     model.notice = nil
                     if catalog.recognitionFailures > 0 {
                         model.notice = "Analyse incomplète pour \(catalog.recognitionFailures) capture(s). Toutes les captures sont conservées."
-                    }
-                    if let error = catalog.errorDescription {
+                    } else if catalog.errorDescription != nil {
                         model.notice = catalog.visionNames > 0
-                            ? "Vision a nommé \(catalog.visionNames) capture(s). \(error)"
-                            : error
+                            ? "Organisation partielle : \(catalog.visionNames) capture(s) nommée(s). Toutes les captures restent disponibles."
+                            : "L’organisation des captures n’a pas pu être terminée. Toutes les captures restent disponibles."
                     }
                     model.progress = AnalysisProgress(
                         stage: .complete,
@@ -261,24 +272,27 @@ public final class AppModel {
         cancelRefinement()
         let ids = screenshots.map(\.id)
         let analyzer = screenCatalogAnalyzer
-        refinementDetail = "Affinage des cas ambigus avec l’IA…"
+        refinementDetail = "Affinage des captures…"
         refinementTask = Task { [weak self] in
             do {
-                let catalog = try await analyzer.analyze(fileURLs: files) { _, detail in
+                let catalog = try await analyzer.analyze(fileURLs: files) { fraction, _ in
                     await MainActor.run {
                         guard let self, self.screenshots.map(\.id) == ids, !Task.isCancelled else { return }
-                        self.refinementDetail = "Affinage IA : \(detail)"
+                        self.refinementDetail = "Affinage des captures… \(fraction.formatted(.percent.precision(.fractionLength(0))))"
                     }
                 }
                 try Task.checkCancellation()
                 guard let self, self.screenshots.map(\.id) == ids else { return }
                 let namedFiles = try ScreenshotExporter.prepareNamedFiles(files: files, screenNames: catalog.classifications.map(\.name))
                 self.applyRefinement(classifications: catalog.classifications, files: namedFiles, expectedIDs: ids)
-                if let error = catalog.errorDescription { self.notice = "Les résultats locaux restent disponibles. \(error)" }
+                if catalog.recognitionFailures > 0 {
+                    self.notice = "Affinage incomplet pour \(catalog.recognitionFailures) capture(s). Toutes les captures restent disponibles."
+                } else if catalog.errorDescription != nil {
+                    self.notice = "L’affinage des captures n’a pas pu être terminé. Les résultats locaux restent disponibles."
+                }
                 self.refinementDetail = nil
                 self.refinementTask = nil
             } catch is CancellationError {
-                // The cancelling action already clears the status; never overwrite a newer import.
             } catch {
                 guard let self, self.screenshots.map(\.id) == ids, !Task.isCancelled else { return }
                 self.notice = "Affinage interrompu : \(error.localizedDescription). Les résultats locaux restent disponibles."

@@ -26,6 +26,7 @@ struct ResultsView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: model.isAnalyzing)
         .transaction { if reduceMotion { $0.animation = nil } }
     }
 
@@ -72,20 +73,22 @@ struct ResultsView: View {
 
     private var status: some View {
         let count = model.isAnalyzing ? model.detectedScreens.count : model.visibleScreenshots.count
+        let countLabel = model.showsUniqueScreens && !model.isAnalyzing
+            ? "écran\(count == 1 ? "" : "s") unique\(count == 1 ? "" : "s")"
+            : "capture\(count == 1 ? "" : "s") trouvée\(count == 1 ? "" : "s")"
         return VStack(spacing: 8) {
             HStack(spacing: 5) {
                 Text(count.formatted())
                     .monospacedDigit()
                     .contentTransition(reduceMotion ? .identity : .numericText())
-                if model.showsUniqueScreens && !model.isAnalyzing {
-                    Text("écran\(count == 1 ? "" : "s") unique\(count == 1 ? "" : "s")")
-                } else {
-                    Text("capture\(count == 1 ? "" : "s") trouvée\(count == 1 ? "" : "s")")
-                }
+                Text(countLabel)
+                    .id(countLabel)
+                    .transition(reduceMotion ? .identity : .opacity)
             }
             .font(.system(size: 24, weight: .semibold))
             .foregroundStyle(StillsetStyle.ink)
             .animation(reduceMotion ? nil : .snappy(duration: 0.35), value: count)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: countLabel)
             .accessibilityElement(children: .combine)
 
             if let focused = model.focusedScreenshot,
@@ -139,7 +142,7 @@ struct ResultsView: View {
                         if model.isAnalyzing && model.progress.stage == .decoding {
                             Text("Recherche d’écrans…")
                         } else if model.progress.stage == .annotating {
-                            Text(model.progress.detail)
+                            Text("Organisation des captures…")
                         } else {
                             Text("Création des captures…")
                         }
@@ -245,27 +248,30 @@ struct ResultsView: View {
             }
             .scrollIndicators(.hidden)
             .frame(height: 158)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: model.detectedScreens.count)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: occurrences.map(\.id))
             .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: model.screenshots.count)
             .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: model.selectedScreenshotIDs)
             .onChange(of: model.detectedScreens.count) {
-                if model.isAnalyzing, model.followsLatest, let last = model.detectedScreens.last {
+                if model.isAnalyzing, model.followsLatest, let last = model.detectedScreens.last,
+                   occurrences.contains(where: { $0.id == last.id }) {
                     withAnimation(reduceMotion ? nil : .smooth(duration: 0.4)) {
                         proxy.scrollTo(last.id, anchor: .trailing)
                     }
                 }
             }
             .onChange(of: model.screenshots.count) {
-                if model.followsLatest, let last = model.screenshots.last {
+                if model.followsLatest, let last = model.screenshots.last,
+                   occurrences.contains(where: { $0.id == last.id }) {
                     withAnimation(reduceMotion ? nil : .smooth(duration: 0.4)) {
                         proxy.scrollTo(last.id, anchor: .trailing)
                     }
                 }
             }
-            .onChange(of: model.focusNavigationID) {
-                if let focusNavigationID = model.focusNavigationID {
+            .onChange(of: model.focusNavigationID) { _, focusedID in
+                if let focusedID,
+                   occurrences.contains(where: { $0.id == focusedID }) {
                     withAnimation(reduceMotion ? nil : .smooth(duration: 0.3)) {
-                        proxy.scrollTo(focusNavigationID)
+                        proxy.scrollTo(focusedID)
                     }
                 }
             }
@@ -534,6 +540,66 @@ private struct StageProgressBar: View {
 #Preview("Timeline · portrait étroit") {
     OccurrenceTimelinePreview(previewWidth: 320)
 }
+
+#if DEBUG
+#Preview("Résultats · organisation en cours") {
+    ResultsRecognitionPreview(completed: false)
+}
+
+#Preview("Résultats · organisation terminée") {
+    ResultsRecognitionPreview(completed: true)
+}
+
+private struct ResultsRecognitionPreview: View {
+    @State private var model: AppModel
+
+    private static let screens = (0..<8).map { index in
+        let timestamp = Double(index) * 3
+        return UIState(interval: timestamp..<(timestamp + 1), representativeTimestamp: timestamp, stabilityScore: 1)
+    }
+    private static let captures = TimelinePreviewImages.captures(for: screens)
+    private static let classifications = Dictionary(uniqueKeysWithValues: zip(screens, [1, 1, 2, 2, 3, 3, 4, 2]).map { screen, stateID in
+        let names = ["Accueil", "Compte", "Réglages", "Confirmation"]
+        return (screen.id, ScreenClassification(screenID: stateID, name: names[stateID - 1], stateID: stateID))
+    })
+
+    init(completed: Bool) {
+        let model = AppModel()
+        model.detectedScreens = Self.screens
+        model.screenshots = Self.captures
+        model.selectScreenshot(Self.captures[7].id, modifiers: [])
+        if completed {
+            model.screenClassifications = Self.classifications
+            model.setUniqueScreens(model.showsUniqueScreens)
+        }
+        model.setPreviewAnalysisRunning(!completed)
+        _model = State(initialValue: model)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button(model.isAnalyzing ? "Terminer l’organisation" : "Recommencer l’organisation") {
+                    if model.isAnalyzing {
+                        model.screenClassifications = Self.classifications
+                        model.setUniqueScreens(model.showsUniqueScreens)
+                        model.setPreviewAnalysisRunning(false)
+                    } else {
+                        model.screenClassifications = [:]
+                        model.selectScreenshot(Self.captures[7].id, modifiers: [])
+                        model.setPreviewAnalysisRunning(true)
+                    }
+                }
+                Spacer()
+            }
+            .padding(16)
+            ResultsView(model: model)
+        }
+        .frame(width: 1000, height: 760)
+        .background(StillsetStyle.surface)
+    }
+}
+#endif
 
 private struct OccurrenceTimelinePreview: View {
     var aspectRatio: CGFloat = 9.0 / 19.0
