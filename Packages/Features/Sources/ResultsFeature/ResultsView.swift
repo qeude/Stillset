@@ -1,7 +1,9 @@
 import CoreGraphics
 import Foundation
+import ImageIO
 import StillsetCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ResultsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -24,6 +26,8 @@ struct ResultsView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: model.isAnalyzing)
+        .transaction { if reduceMotion { $0.animation = nil } }
     }
 
     @ViewBuilder
@@ -42,7 +46,7 @@ struct ResultsView: View {
                     )
                         .frame(width: imageSize.width, height: imageSize.height)
                         .modifier(PreviewImageChrome())
-                        .transition(.opacity)
+                        .transition(reduceMotion ? .identity : .opacity)
                 }
 
                 if shouldShowScreenshotPreview {
@@ -51,11 +55,11 @@ struct ResultsView: View {
                 } else if model.analysisPreviewFrames.isEmpty {
                     ProgressView()
                         .tint(StillsetStyle.accent)
-                        .transition(.opacity)
+                        .transition(reduceMotion ? .identity : .opacity)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .animation(.easeInOut(duration: 0.4), value: isShowingFrameAnalysis)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.4), value: isShowingFrameAnalysis)
         }
     }
 
@@ -69,28 +73,25 @@ struct ResultsView: View {
 
     private var status: some View {
         let count = model.isAnalyzing ? model.detectedScreens.count : model.visibleScreenshots.count
+        let countLabel = model.showsUniqueScreens && !model.isAnalyzing
+            ? "écran\(count == 1 ? "" : "s") unique\(count == 1 ? "" : "s")"
+            : "capture\(count == 1 ? "" : "s") trouvée\(count == 1 ? "" : "s")"
         return VStack(spacing: 8) {
-            HStack(spacing: 5) {
-                Text(count.formatted())
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
-                if model.showsUniqueScreens && !model.isAnalyzing {
-                    Text("écran\(count == 1 ? "" : "s") unique\(count == 1 ? "" : "s")")
-                } else {
-                    Text("capture\(count == 1 ? "" : "s") trouvée\(count == 1 ? "" : "s")")
-                }
-            }
-            .font(.system(size: 24, weight: .semibold))
-            .foregroundStyle(StillsetStyle.ink)
-            .animation(reduceMotion ? nil : .snappy(duration: 0.35), value: count)
-            .accessibilityElement(children: .combine)
+            Text("\(count.formatted()) \(countLabel)")
+                .monospacedDigit()
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(StillsetStyle.ink)
+                .multilineTextAlignment(.center)
+                .contentTransition(.identity)
+                .transaction { $0.animation = nil }
+                .accessibilityElement(children: .combine)
 
             if let focused = model.focusedScreenshot,
                let screen = model.screenClassifications[focused.id] {
                 Text(screen.name)
                     .font(.headline)
                     .foregroundStyle(StillsetStyle.muted)
-                    .lineLimit(2)
+                    .lineLimit(2, reservesSpace: true)
                     .frame(maxWidth: 500)
                     .help("Nom d’écran proposé automatiquement")
             }
@@ -129,7 +130,6 @@ struct ResultsView: View {
     }
 
     private var progressFooter: some View {
-        let fraction = model.isAnalyzing && model.progress.stage == .exporting ? 1 : model.progress.fraction
         return VStack {
             if model.isWorking {
                 VStack(spacing: 7) {
@@ -137,7 +137,7 @@ struct ResultsView: View {
                         if model.isAnalyzing && model.progress.stage == .decoding {
                             Text("Recherche d’écrans…")
                         } else if model.progress.stage == .annotating {
-                            Text(model.progress.detail)
+                            Text("Organisation des captures…")
                         } else {
                             Text("Création des captures…")
                         }
@@ -148,7 +148,7 @@ struct ResultsView: View {
                             Text("\(model.screenshots.count) sur \(model.detectedScreens.count)")
                                 .monospacedDigit()
                         } else if !model.isAnalyzing {
-                            Text(fraction.formatted(.percent.precision(.fractionLength(0))))
+                            Text(model.progress.fraction.formatted(.percent.precision(.fractionLength(0))))
                                 .monospacedDigit()
                                 .foregroundStyle(StillsetStyle.accent)
                         }
@@ -161,12 +161,7 @@ struct ResultsView: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(StillsetStyle.muted)
 
-                    ProgressRail(
-                        value: fraction,
-                        screens: model.isAnalyzing ? model.detectedScreens : [],
-                        duration: model.analysisDuration,
-                        readyCount: model.screenshots.count
-                    )
+                    StageProgressBar(fraction: model.progress.fraction)
                 }
                 .frame(maxWidth: 420)
                 .frame(maxWidth: .infinity)
@@ -182,7 +177,7 @@ struct ResultsView: View {
                 HStack(spacing: 8) {
                     Text(notice)
                         .foregroundStyle(StillsetStyle.muted)
-                        .transition(.opacity)
+                        .transition(reduceMotion ? .identity : .opacity)
 
                     if model.exportedFolderURL != nil {
                         Button("Afficher dans le Finder", action: model.showExportedFolder)
@@ -196,38 +191,45 @@ struct ResultsView: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: 58)
-        .animation(.easeInOut(duration: 0.24), value: model.isWorking)
-        .animation(.easeInOut(duration: 0.24), value: model.notice)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: model.isWorking)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: model.notice)
+    }
+
+    private var allTimelineOccurrences: [TimelineOccurrence] {
+        if model.isAnalyzing {
+            return TimelineOccurrence.analyzing(screens: model.detectedScreens, screenshots: model.screenshots)
+        }
+        return model.screenshots.map { TimelineOccurrence(state: $0.state, capture: $0) }
     }
 
     private var timeline: some View {
-        let thumbnailHeight: CGFloat = 112
-        let thumbnailWidth = min(160, max(48, thumbnailHeight * videoAspectRatio))
+        let thumbnailWidth = min(160, max(48, 112 * videoAspectRatio))
+        let occurrences = allTimelineOccurrences
+        let visibleIDs = model.isAnalyzing ? occurrences.map(\.id) : model.visibleScreenshots.map(\.id)
+        let visibleRanks = Dictionary(uniqueKeysWithValues: visibleIDs.enumerated().map { ($0.element, $0.offset) })
 
         return ScrollViewReader { proxy in
             ScrollView(.horizontal) {
-                LazyHStack(spacing: 12) {
-                    ForEach(Array(model.visibleScreenshots.enumerated()), id: \.element.id) { index, screenshot in
-                        let isSelected = model.selectedScreenshotIDs.contains(screenshot.id)
-                        let screen = model.screenClassifications[screenshot.id]
-                        ScreenshotPreview(url: screenshot.fileURL, maxPixelSize: 180)
-                            .frame(width: thumbnailWidth, height: thumbnailHeight)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .strokeBorder(
-                                        isSelected ? StillsetStyle.accent : StillsetStyle.border.opacity(0.55),
-                                        lineWidth: isSelected ? 2 : 0.5
-                                    )
-                            }
-                            .padding(3)
-                            .background {
-                                if isSelected {
-                                    RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                        .fill(StillsetStyle.accent.opacity(0.13))
-                                }
-                            }
-                            .overlay {
+                HStack(spacing: 0) {
+                    ForEach(occurrences) { occurrence in
+                        let visibleRank = visibleRanks[occurrence.id]
+                        let isVisible = visibleRank != nil
+                        let index = visibleRank ?? 0
+                        let trailingGap: CGFloat = occurrence.id == visibleIDs.last ? 0 : 12
+                        let isSelected = model.selectedScreenshotIDs.contains(occurrence.id)
+                        let screen = model.screenClassifications[occurrence.id]
+                        TimelineOccurrenceCell(
+                            occurrence: occurrence,
+                            index: index,
+                            width: thumbnailWidth,
+                            isSelected: isSelected
+                        )
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Capture \(index + 1), \(occurrence.state.representativeTimestamp.stillsetTimecode)")
+                        .accessibilityValue("En attente")
+                        .accessibilityHidden(!isVisible || occurrence.capture != nil)
+                        .overlay {
+                            if isVisible, let screenshot = occurrence.capture {
                                 TimelineDragView(
                                     fileURLs: model.dragURLs(startingAt: screenshot.id),
                                     accessibilityText: "Capture \(index + 1), \(screenshot.state.representativeTimestamp.stillsetTimecode)\(isSelected ? ", sélectionnée" : "")\(screen.map { ", écran \($0.screenID), \($0.name)" } ?? "")",
@@ -235,29 +237,49 @@ struct ResultsView: View {
                                     onArrow: model.moveFocus(by:)
                                 )
                             }
-                        .help(screen.map { "Écran \($0.screenID) · \($0.name) · \(screenshot.state.representativeTimestamp.stillsetTimecode)" } ?? screenshot.state.representativeTimestamp.stillsetTimecode)
-                        .id(screenshot.id)
-                        .transition(.opacity)
+                        }
+                        .help(screen.map { "Écran \($0.screenID) · \($0.name) · \(occurrence.state.representativeTimestamp.stillsetTimecode)" } ?? occurrence.state.representativeTimestamp.stillsetTimecode)
+                        .compositingGroup()
+                        .opacity(isVisible ? 1 : 0)
+                        .geometryGroup()
+                        .frame(width: isVisible ? thumbnailWidth + 6 + trailingGap : 0, height: 136, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .allowsHitTesting(isVisible)
+                        .id(occurrence.id)
                     }
                 }
                 .padding(.horizontal, 24)
                 .padding(.vertical, 10)
             }
-            .scrollIndicators(.hidden)
-            .frame(height: 138)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: model.screenshots.count)
-            .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: model.selectedScreenshotIDs)
-            .onChange(of: model.screenshots.count) {
-                if model.followsLatest, let last = model.screenshots.last {
+            .overlay {
+                if visibleIDs.isEmpty {
+                    TimelineEmptyState()
+                }
+            }
+            .scrollIndicators(.never)
+            .frame(height: 158)
+            .animation(reduceMotion ? nil : .smooth(duration: 0.36), value: visibleIDs)
+            .onChange(of: model.detectedScreens.count) {
+                if model.isAnalyzing, model.followsLatest, let last = model.detectedScreens.last,
+                   visibleRanks[last.id] != nil {
                     withAnimation(reduceMotion ? nil : .smooth(duration: 0.4)) {
                         proxy.scrollTo(last.id, anchor: .trailing)
                     }
                 }
             }
-            .onChange(of: model.focusNavigationID) {
-                if let focusNavigationID = model.focusNavigationID {
+            .onChange(of: model.screenshots.count) {
+                if model.followsLatest, let last = model.screenshots.last,
+                   visibleRanks[last.id] != nil {
+                    withAnimation(reduceMotion ? nil : .smooth(duration: 0.4)) {
+                        proxy.scrollTo(last.id, anchor: .trailing)
+                    }
+                }
+            }
+            .onChange(of: model.focusNavigationID) { _, focusedID in
+                if let focusedID,
+                   visibleRanks[focusedID] != nil {
                     withAnimation(reduceMotion ? nil : .smooth(duration: 0.3)) {
-                        proxy.scrollTo(focusNavigationID)
+                        proxy.scrollTo(focusedID)
                     }
                 }
             }
@@ -320,7 +342,12 @@ private struct PhotoStackPreview: View {
             }
 
             if let screenshot = model.focusedScreenshot {
-                ScreenshotPreview(url: screenshot.fileURL, maxPixelSize: 1400)
+                ScreenshotPreview(
+                    url: screenshot.fileURL,
+                    maxPixelSize: 1400,
+                    occurrenceID: screenshot.id,
+                    animatesCaptureArrival: model.isAnalyzing && model.followsLatest
+                )
                     .frame(width: width, height: height)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay {
@@ -332,7 +359,7 @@ private struct PhotoStackPreview: View {
                         if selectedCount > 1 {
                             Text("\(selectedCount)")
                                 .font(.system(size: 12, weight: .semibold))
-                                .contentTransition(.numericText())
+                                .contentTransition(reduceMotion ? .identity : .numericText())
                                 .foregroundStyle(.white)
                                 .frame(width: 28, height: 28)
                                 .background(StillsetStyle.accent, in: Circle())
@@ -394,74 +421,350 @@ private struct PreviewImageChrome: ViewModifier {
     }
 }
 
-private struct ProgressRail: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    let value: Double
-    var screens: [UIState] = []
-    var duration: TimeInterval = 0
-    var readyCount: Int = 0
+private struct TimelineOccurrence: Identifiable {
+    let state: UIState
+    let capture: CapturedScreenshot?
+
+    var id: UUID { state.id }
+
+    static func analyzing(screens: [UIState], screenshots: [CapturedScreenshot]) -> [Self] {
+        let capturesByID = Dictionary(uniqueKeysWithValues: screenshots.map { ($0.id, $0) })
+        let detectedIDs = Set(screens.map(\.id))
+        return screens.map { Self(state: $0, capture: capturesByID[$0.id]) }
+            + screenshots.filter { !detectedIDs.contains($0.id) }.map { Self(state: $0.state, capture: $0) }
+    }
+}
+
+private struct TimelineOccurrenceCell: View {
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+
+    let occurrence: TimelineOccurrence
+    let index: Int
+    let width: CGFloat
+    var isSelected = false
+    var previewReduceMotion = false
+
+    private var reduceMotion: Bool {
+        previewReduceMotion || systemReduceMotion
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ZStack {
+                StillsetStyle.surface
+                Image(systemName: "photo")
+                    .font(.system(size: 16, weight: .light))
+                    .foregroundStyle(StillsetStyle.muted.opacity(0.65))
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Capture \(index + 1), \(occurrence.state.representativeTimestamp.stillsetTimecode)")
+                    .accessibilityValue("En attente")
+                    .accessibilityHidden(occurrence.capture != nil)
+
+                if let screenshot = occurrence.capture {
+                    ScreenshotPreview(
+                        url: screenshot.fileURL,
+                        maxPixelSize: 180,
+                        occurrenceID: occurrence.id,
+                        showsLoadingIndicator: false,
+                        previewReduceMotion: previewReduceMotion
+                    )
+                }
+            }
+            .frame(width: width, height: 112)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(
+                        isSelected ? StillsetStyle.accent : StillsetStyle.border.opacity(0.55),
+                        lineWidth: isSelected ? 2 : 0.5
+                    )
+            }
+            .padding(3)
+            .background {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(StillsetStyle.accent.opacity(0.13))
+                }
+            }
+            .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: isSelected)
+
+            Text(occurrence.state.representativeTimestamp.stillsetTimecode)
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundStyle(StillsetStyle.muted)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .padding(.horizontal, 3)
+                .frame(height: 12)
+                .accessibilityHidden(true)
+        }
+        .frame(width: width + 6)
+    }
+}
+
+private struct TimelineEmptyState: View {
+    var body: some View {
+        Text("Les écrans détectés apparaîtront ici.")
+            .font(.caption)
+            .foregroundStyle(StillsetStyle.muted)
+    }
+}
+
+private struct StageProgressBar: View {
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    let fraction: Double
+    var previewReduceMotion = false
+
+    private var reduceMotion: Bool {
+        previewReduceMotion || systemReduceMotion
+    }
+
+    private var stageFraction: Double {
+        fraction.isFinite ? min(1, max(0, fraction)) : 0
+    }
 
     var body: some View {
         GeometryReader { geometry in
-            let fraction = min(1, max(0, value))
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(StillsetStyle.ink.opacity(0.12))
-                    .frame(height: 4)
-
-                Capsule()
-                    .fill(StillsetStyle.accent)
-                    .frame(width: geometry.size.width * fraction, height: 4)
-                    .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: fraction)
-
-                ForEach(Array(screens.enumerated()), id: \.element.id) { index, screen in
-                    let position = duration > 0 ? min(1, max(0, screen.representativeTimestamp / duration)) : 0
-                    Circle()
-                        .fill(index < readyCount ? StillsetStyle.accent : StillsetStyle.surface)
-                        .overlay { Circle().strokeBorder(StillsetStyle.accent, lineWidth: 1.5) }
-                        .frame(width: 10, height: 10)
-                        .offset(x: max(0, min(geometry.size.width - 10, geometry.size.width * position - 5)))
-                        .transition(.opacity)
+            Capsule()
+                .fill(StillsetStyle.ink.opacity(0.12))
+                .overlay(alignment: .leading) {
+                    Capsule()
+                        .fill(StillsetStyle.accent)
+                        .frame(width: geometry.size.width * stageFraction)
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: stageFraction)
                 }
-
-                Circle()
-                    .fill(StillsetStyle.accent)
-                    .frame(width: 6, height: 6)
-                    .offset(x: max(0, min(geometry.size.width - 6, geometry.size.width * fraction - 3)))
-                    .opacity(fraction > 0 && fraction < 1 ? 1 : 0)
-                    .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: fraction)
-            }
-            .frame(maxHeight: .infinity)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: screens.count)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: readyCount)
         }
-        .frame(height: 18)
+        .frame(height: 4)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Progression")
-        .accessibilityValue("\(Int(min(1, max(0, value)) * 100)) %, \(screens.count) écrans détectés, \(min(readyCount, screens.count)) captures prêtes")
+        .accessibilityValue(stageFraction.formatted(.percent.precision(.fractionLength(0))))
     }
 }
 
-#Preview("Progression · clair et sombre") {
-    let screens = [0.12, 0.3, 0.38].map { timestamp in
+#Preview("Timeline · clair et sombre") {
+    OccurrenceTimelinePreview()
+}
+
+#Preview("Timeline · mouvement réduit") {
+    OccurrenceTimelinePreview(previewReduceMotion: true)
+}
+
+#Preview("Timeline · paysage étroit") {
+    OccurrenceTimelinePreview(aspectRatio: 16.0 / 9.0, previewWidth: 320, previewReduceMotion: true)
+}
+
+#Preview("Timeline · portrait étroit") {
+    OccurrenceTimelinePreview(previewWidth: 320)
+}
+
+#if DEBUG
+#Preview("Résultats · organisation en cours") {
+    ResultsRecognitionPreview(completed: false)
+}
+
+#Preview("Résultats · sélection conservée") {
+    ResultsRecognitionPreview(completed: true, focusesRepeat: false)
+}
+
+#Preview("Résultats · sélection remplacée") {
+    ResultsRecognitionPreview(completed: true, focusesRepeat: true)
+}
+
+private struct ResultsRecognitionPreview: View {
+    @State private var model: AppModel
+    private let focusesRepeat: Bool
+
+    private static let screens = (0..<24).map { index in
+        let timestamp = Double(index) * 3
+        return UIState(
+            id: UUID(uuidString: "00000000-0000-0000-0000-\(String(format: "%012d", index + 1))")!,
+            interval: timestamp..<(timestamp + 1),
+            representativeTimestamp: timestamp,
+            stabilityScore: 1
+        )
+    }
+    private static let captures = TimelinePreviewImages.captures(for: screens)
+    private static let classifications = Dictionary(uniqueKeysWithValues: screens.enumerated().map { index, screen in
+        let stateID = [1, 1, 2, 2, 3, 3, 4, 2][index % 8]
+        let names = ["Accueil", "Compte", "Réglages des notifications et des préférences de confidentialité du compte", "Confirmation"]
+        return (screen.id, ScreenClassification(screenID: stateID, name: names[stateID - 1], stateID: stateID))
+    })
+
+    init(completed: Bool, focusesRepeat: Bool = true) {
+        self.focusesRepeat = focusesRepeat
+        let model = AppModel()
+        model.detectedScreens = Self.screens
+        model.screenshots = Self.captures
+        if completed {
+            model.screenClassifications = Self.classifications
+            model.setUniqueScreens(false)
+        }
+        model.selectScreenshot(Self.captures[focusesRepeat ? Self.captures.count - 1 : 4].id, modifiers: [])
+        model.setPreviewAnalysisRunning(!completed)
+        _model = State(initialValue: model)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button(model.isAnalyzing ? "Terminer l’organisation" : "Recommencer l’organisation") {
+                    if model.isAnalyzing {
+                        model.screenClassifications = Self.classifications
+                        model.setUniqueScreens(model.showsUniqueScreens)
+                        model.setPreviewAnalysisRunning(false)
+                    } else {
+                        model.screenClassifications = [:]
+                        model.selectScreenshot(Self.captures[focusesRepeat ? Self.captures.count - 1 : 4].id, modifiers: [])
+                        model.setPreviewAnalysisRunning(true)
+                    }
+                }
+                Spacer()
+            }
+            .padding(16)
+            ResultsView(model: model)
+        }
+        .frame(width: 1000, height: 760)
+        .background(StillsetStyle.surface)
+    }
+}
+#endif
+
+private struct OccurrenceTimelinePreview: View {
+    var aspectRatio: CGFloat = 9.0 / 19.0
+    var previewWidth: CGFloat = 540
+    var previewReduceMotion = false
+
+    private static let sparse = [0, 0.16, 0.5, 0.78, 1].map { timestamp in
         UIState(interval: timestamp..<(timestamp + 0.04), representativeTimestamp: timestamp, stabilityScore: 1)
     }
-    VStack(spacing: 0) {
-        ForEach([ColorScheme.light, .dark], id: \.self) { scheme in
-            VStack(spacing: 20) {
-                ProgressRail(value: 0)
-                ProgressRail(value: 0.6, screens: screens, duration: 1)
-                ProgressRail(value: 1, screens: screens, duration: 1, readyCount: screens.count)
+    private static let dense = (0..<24).map { index in
+        let timestamp = 0.4 + Double(index) * 0.007
+        return UIState(interval: timestamp..<(timestamp + 0.004), representativeTimestamp: timestamp, stabilityScore: 1)
+    }
+    private static let portraitSparseCaptures = TimelinePreviewImages.captures(for: sparse)
+    private static let portraitDenseCaptures = TimelinePreviewImages.captures(for: dense)
+    private static let landscapeSparseCaptures = TimelinePreviewImages.captures(for: sparse, aspectRatio: 16.0 / 9.0)
+    private static let landscapeDenseCaptures = TimelinePreviewImages.captures(for: dense, aspectRatio: 16.0 / 9.0)
+
+    private var sparseCaptures: [CapturedScreenshot] {
+        aspectRatio > 1 ? Self.landscapeSparseCaptures : Self.portraitSparseCaptures
+    }
+
+    private var denseCaptures: [CapturedScreenshot] {
+        aspectRatio > 1 ? Self.landscapeDenseCaptures : Self.portraitDenseCaptures
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach([ColorScheme.light, .dark], id: \.self) { scheme in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Recherche d’écrans…")
+                    strip(screens: [], captures: [])
+                    StageProgressBar(fraction: 0, previewReduceMotion: previewReduceMotion)
+                    Text("Recherche · écrans détectés")
+                    strip(screens: Self.sparse, captures: [])
+                    StageProgressBar(fraction: 0.63, previewReduceMotion: previewReduceMotion)
+                    Text("Captures · ordre indépendant")
+                    strip(screens: Self.sparse, captures: [sparseCaptures[3], sparseCaptures[0]])
+                    StageProgressBar(fraction: 0.4, previewReduceMotion: previewReduceMotion)
+                    Text("Repérage · captures prêtes")
+                    strip(screens: Self.sparse, captures: sparseCaptures)
+                    StageProgressBar(fraction: 0.35, previewReduceMotion: previewReduceMotion)
+                    Text("Captures · écrans rapprochés")
+                    strip(
+                        screens: Self.dense,
+                        captures: denseCaptures.enumerated().filter { $0.offset.isMultiple(of: 2) }.map(\.element)
+                    )
+                    StageProgressBar(fraction: 0.5, previewReduceMotion: previewReduceMotion)
+                }
+                .font(.caption)
+                .foregroundStyle(StillsetStyle.muted)
+                .padding(20)
+                .background(StillsetStyle.surface)
+                .environment(\.colorScheme, scheme)
             }
-            .padding(28)
-            .background(StillsetStyle.surface)
-            .environment(\.colorScheme, scheme)
+        }
+        .frame(width: previewWidth)
+    }
+
+    private func strip(screens: [UIState], captures: [CapturedScreenshot]) -> some View {
+        let occurrences = TimelineOccurrence.analyzing(screens: screens, screenshots: captures)
+        return ScrollView(.horizontal) {
+            LazyHStack(spacing: 12) {
+                ForEach(Array(occurrences.enumerated()), id: \.element.id) { index, occurrence in
+                    TimelineOccurrenceCell(
+                        occurrence: occurrence,
+                        index: index,
+                        width: min(160, max(48, 112 * aspectRatio)),
+                        isSelected: occurrence.id == captures.first?.id,
+                        previewReduceMotion: previewReduceMotion
+                    )
+                    .id(occurrence.id)
+                }
+            }
+            .padding(3)
+        }
+        .overlay {
+            if occurrences.isEmpty { TimelineEmptyState() }
+        }
+        .scrollIndicators(.never)
+        .frame(height: 158)
+    }
+}
+
+private enum TimelinePreviewImages {
+    private static let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("StillsetTimelinePreview-\(UUID().uuidString)", isDirectory: true)
+
+    static func captures(for screens: [UIState], aspectRatio: CGFloat = 9.0 / 19.0) -> [CapturedScreenshot] {
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        } catch {
+            preconditionFailure("Impossible de créer les images de prévisualisation : \(error)")
+        }
+        return screens.enumerated().map { index, screen in
+            let url = directory.appendingPathComponent("\(screen.id.uuidString)-\(aspectRatio).png")
+            guard let image = image(index: index, aspectRatio: aspectRatio),
+                  let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
+                preconditionFailure("Impossible de préparer une image de prévisualisation")
+            }
+            CGImageDestinationAddImage(destination, image, nil)
+            guard CGImageDestinationFinalize(destination) else {
+                preconditionFailure("Impossible d’écrire une image de prévisualisation")
+            }
+            return CapturedScreenshot(state: screen, fileURL: url)
         }
     }
-    .frame(width: 540)
+
+    private static func image(index: Int, aspectRatio: CGFloat) -> CGImage? {
+        let width = max(1, Int(220 * aspectRatio))
+        guard let context = CGContext(
+            data: nil, width: width, height: 220, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        context.scaleBy(x: CGFloat(width) / 104, y: 1)
+        let hue = CGFloat(index % 5) / 5
+        context.setFillColor(CGColor(red: 0.92, green: 0.94, blue: 0.97, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 104, height: 220))
+        context.setFillColor(CGColor(red: 0.16 + hue * 0.3, green: 0.35, blue: 0.7 - hue * 0.2, alpha: 1))
+        context.fill(CGRect(x: 0, y: 182, width: 104, height: 38))
+        context.fill(CGRect(x: 8, y: 18, width: 88, height: 12))
+        for row in 0..<4 {
+            let y = CGFloat(142 - row * 34)
+            context.setFillColor(CGColor(gray: 1, alpha: 1))
+            context.fill(CGRect(x: 8, y: y, width: 88, height: 26))
+            context.setFillColor(CGColor(red: 0.35, green: 0.57 + hue * 0.15, blue: 0.78, alpha: 1))
+            context.fill(CGRect(x: 13, y: y + 5, width: 16, height: 16))
+            context.setFillColor(CGColor(gray: 0.55, alpha: 1))
+            context.fill(CGRect(x: 35, y: y + 15, width: CGFloat(40 - (index + row) % 3 * 7), height: 3))
+            context.setFillColor(CGColor(gray: 0.8, alpha: 1))
+            context.fill(CGRect(x: 35, y: y + 8, width: 48, height: 3))
+        }
+        return context.makeImage()
+    }
 }
 
 private struct AnalysisFramePreview: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let frames: [Frame]
     let startedAt: Date
     let isAnimating: Bool
@@ -469,21 +772,22 @@ private struct AnalysisFramePreview: View {
     @State private var lastDisplayedFrameTimestamp: TimeInterval?
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 8.0, paused: !isAnimating || frames.count < 2)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 8.0, paused: reduceMotion || !isAnimating || frames.count < 2)) { context in
             if !frames.isEmpty {
                 let elapsed = max(0, context.date.timeIntervalSince(startedAt))
                 let index = Int(elapsed / 0.14) % frames.count
-                let frame = isAnimating
+                let fallbackFrame = frames[reduceMotion ? 0 : index]
+                let frame = isAnimating && !reduceMotion
                     ? frames[index]
-                    : frames.first { $0.timestamp == lastDisplayedFrameTimestamp } ?? frames[index]
+                    : frames.first { $0.timestamp == lastDisplayedFrameTimestamp } ?? fallbackFrame
                 if let image = makeImage(frame) {
                     Image(decorative: image, scale: 1)
                         .resizable()
                         .scaledToFit()
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .transition(.opacity)
+                        .transition(reduceMotion ? .identity : .opacity)
                         .id(frame.timestamp)
-                        .animation(.easeInOut(duration: 0.22), value: frame.timestamp)
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: frame.timestamp)
                         .onAppear { lastDisplayedFrameTimestamp = frame.timestamp }
                         .onChange(of: frame.timestamp) {
                             lastDisplayedFrameTimestamp = frame.timestamp
