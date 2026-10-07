@@ -24,7 +24,6 @@ public final class AppModel {
     var focusNavigationID: UUID?
     var analysisPreviewFrames: [Frame] = []
     var detectedScreens: [UIState] = []
-    var analysisDuration: TimeInterval = 0
     var analysisStartedAt = Date()
     var progress = AnalysisProgress(stage: .decoding, fraction: 0, detail: "Déposez un enregistrement")
     public private(set) var isWorking = false
@@ -127,7 +126,6 @@ public final class AppModel {
         selectionAnchorID = nil
         analysisPreviewFrames = []
         detectedScreens = []
-        analysisDuration = 0
         analysisStartedAt = Date()
         followsLatest = true
         videoURL = url
@@ -161,12 +159,6 @@ public final class AppModel {
                             guard model.isAnalyzing, model.progress.stage == .decoding else { return }
                             let colorPreviews = frames.filter { $0.previewRGBA != nil }
                             model.analysisPreviewFrames = Array((model.analysisPreviewFrames + colorPreviews).suffix(2)) // ponytail: keep two full-resolution previews in memory; use disk-backed history if longer playback is needed.
-                        }
-                    },
-                    onPrepared: { duration in
-                        await MainActor.run {
-                            guard model.isAnalyzing, !Task.isCancelled else { return }
-                            model.analysisDuration = duration
                         }
                     },
                     onDetectedScreens: { screens in
