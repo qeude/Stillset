@@ -7,11 +7,14 @@ struct ScreenshotPreview: View {
     var occurrenceID: UUID? = nil
     var animatesCaptureArrival = false
     var showsLoadingIndicator = true
-    var usesParentAnimation = false
-    var onImageLoaded: ((UUID?) -> Void)? = nil
+    var previewReduceMotion = false
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @State private var loadedImage: LoadedImage?
+
+    private var reduceMotion: Bool {
+        previewReduceMotion || systemReduceMotion
+    }
 
     private struct LoadedImage {
         let occurrenceID: UUID?
@@ -19,19 +22,13 @@ struct ScreenshotPreview: View {
     }
 
     var body: some View {
-        Group {
-            if usesParentAnimation {
-                imageContent
-            } else {
-                imageContent
-                    .animation(
-                        occurrenceID == nil || reduceMotion ? nil : .easeOut(duration: animatesCaptureArrival ? 0.2 : 0.14),
-                        value: loadedImage?.occurrenceID
-                    )
-            }
-        }
+        imageContent
+            .animation(
+                occurrenceID == nil || reduceMotion ? nil : .easeOut(duration: animatesCaptureArrival ? 0.2 : 0.14),
+                value: loadedImage?.occurrenceID
+            )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .transaction { if !usesParentAnimation { $0.animation = nil } }
+        .transaction { $0.animation = nil }
         .task(id: url) {
             let sourceURL = url
             let pixelSize = maxPixelSize
@@ -47,9 +44,7 @@ struct ScreenshotPreview: View {
             }.value
             guard !Task.isCancelled else { return }
             guard let loadedImage else { return }
-            let shouldNotify = self.loadedImage == nil || self.loadedImage?.occurrenceID != imageID
             self.loadedImage = LoadedImage(occurrenceID: imageID, image: loadedImage)
-            if shouldNotify { onImageLoaded?(imageID) }
         }
     }
 
@@ -59,8 +54,12 @@ struct ScreenshotPreview: View {
                 Image(decorative: loadedImage.image, scale: 1)
                     .resizable()
                     .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background {
+                        if !showsLoadingIndicator { StillsetStyle.surface }
+                    }
                     .id(loadedImage.occurrenceID)
-                    .transition(usesParentAnimation ? .identity : imageTransition)
+                    .transition(imageTransition)
             } else if showsLoadingIndicator {
                 ProgressView()
                     .tint(StillsetStyle.accent)

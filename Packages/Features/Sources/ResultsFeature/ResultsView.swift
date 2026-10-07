@@ -163,14 +163,7 @@ struct ResultsView: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(StillsetStyle.muted)
 
-                    ProgressRail(
-                        progress: model.progress,
-                        isAnalyzing: model.isAnalyzing,
-                        screens: model.isAnalyzing ? model.detectedScreens : [],
-                        duration: model.analysisDuration,
-                        screenshots: model.screenshots,
-                        videoAspectRatio: videoAspectRatio
-                    )
+                    StageProgressBar(fraction: model.progress.fraction)
                 }
                 .frame(maxWidth: 420)
                 .frame(maxWidth: .infinity)
@@ -199,39 +192,36 @@ struct ResultsView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: model.isAnalyzing ? 84 : 58)
+        .frame(height: 58)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: model.isWorking)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: model.notice)
     }
 
+    private var timelineOccurrences: [TimelineOccurrence] {
+        if model.isAnalyzing {
+            return TimelineOccurrence.analyzing(screens: model.detectedScreens, screenshots: model.screenshots)
+        }
+        return model.visibleScreenshots.map { TimelineOccurrence(state: $0.state, capture: $0) }
+    }
+
     private var timeline: some View {
-        let thumbnailHeight: CGFloat = 112
-        let thumbnailWidth = min(160, max(48, thumbnailHeight * videoAspectRatio))
+        let thumbnailWidth = min(160, max(48, 112 * videoAspectRatio))
+        let occurrences = timelineOccurrences
 
         return ScrollViewReader { proxy in
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 12) {
-                    ForEach(Array(model.visibleScreenshots.enumerated()), id: \.element.id) { index, screenshot in
-                        let isSelected = model.selectedScreenshotIDs.contains(screenshot.id)
-                        let screen = model.screenClassifications[screenshot.id]
-                        ScreenshotPreview(url: screenshot.fileURL, maxPixelSize: 180)
-                            .frame(width: thumbnailWidth, height: thumbnailHeight)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .strokeBorder(
-                                        isSelected ? StillsetStyle.accent : StillsetStyle.border.opacity(0.55),
-                                        lineWidth: isSelected ? 2 : 0.5
-                                    )
-                            }
-                            .padding(3)
-                            .background {
-                                if isSelected {
-                                    RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                        .fill(StillsetStyle.accent.opacity(0.13))
-                                }
-                            }
-                            .overlay {
+                    ForEach(Array(occurrences.enumerated()), id: \.element.id) { index, occurrence in
+                        let isSelected = model.selectedScreenshotIDs.contains(occurrence.id)
+                        let screen = model.screenClassifications[occurrence.id]
+                        TimelineOccurrenceCell(
+                            occurrence: occurrence,
+                            index: index,
+                            width: thumbnailWidth,
+                            isSelected: isSelected
+                        )
+                        .overlay {
+                            if let screenshot = occurrence.capture {
                                 TimelineDragView(
                                     fileURLs: model.dragURLs(startingAt: screenshot.id),
                                     accessibilityText: "Capture \(index + 1), \(screenshot.state.representativeTimestamp.stillsetTimecode)\(isSelected ? ", sélectionnée" : "")\(screen.map { ", écran \($0.screenID), \($0.name)" } ?? "")",
@@ -239,18 +229,32 @@ struct ResultsView: View {
                                     onArrow: model.moveFocus(by:)
                                 )
                             }
-                        .help(screen.map { "Écran \($0.screenID) · \($0.name) · \(screenshot.state.representativeTimestamp.stillsetTimecode)" } ?? screenshot.state.representativeTimestamp.stillsetTimecode)
-                        .id(screenshot.id)
+                        }
+                        .help(screen.map { "Écran \($0.screenID) · \($0.name) · \(occurrence.state.representativeTimestamp.stillsetTimecode)" } ?? occurrence.state.representativeTimestamp.stillsetTimecode)
+                        .id(occurrence.id)
                         .transition(reduceMotion ? .identity : .opacity)
                     }
                 }
                 .padding(.horizontal, 24)
                 .padding(.vertical, 10)
             }
+            .overlay {
+                if occurrences.isEmpty {
+                    TimelineEmptyState()
+                }
+            }
             .scrollIndicators(.hidden)
             .frame(height: 138)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: model.detectedScreens.count)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: model.screenshots.count)
             .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: model.selectedScreenshotIDs)
+            .onChange(of: model.detectedScreens.count) {
+                if model.isAnalyzing, model.followsLatest, let last = model.detectedScreens.last {
+                    withAnimation(reduceMotion ? nil : .smooth(duration: 0.4)) {
+                        proxy.scrollTo(last.id, anchor: .trailing)
+                    }
+                }
+            }
             .onChange(of: model.screenshots.count) {
                 if model.followsLatest, let last = model.screenshots.last {
                     withAnimation(reduceMotion ? nil : .smooth(duration: 0.4)) {
@@ -403,294 +407,242 @@ private struct PreviewImageChrome: ViewModifier {
     }
 }
 
-private struct ProgressRail: View {
+private struct TimelineOccurrence: Identifiable {
+    let state: UIState
+    let capture: CapturedScreenshot?
+
+    var id: UUID { state.id }
+
+    static func analyzing(screens: [UIState], screenshots: [CapturedScreenshot]) -> [Self] {
+        let capturesByID = Dictionary(uniqueKeysWithValues: screenshots.map { ($0.id, $0) })
+        let detectedIDs = Set(screens.map(\.id))
+        return screens.map { Self(state: $0, capture: capturesByID[$0.id]) }
+            + screenshots.filter { !detectedIDs.contains($0.id) }.map { Self(state: $0.state, capture: $0) }
+    }
+}
+
+private struct TimelineOccurrenceCell: View {
+    let occurrence: TimelineOccurrence
+    let index: Int
+    let width: CGFloat
+    var isSelected = false
+    var previewReduceMotion = false
+
+    var body: some View {
+        ZStack {
+            StillsetStyle.surface
+            VStack(spacing: 8) {
+                Image(systemName: "photo")
+                    .font(.system(size: 16, weight: .light))
+                Text(occurrence.state.representativeTimestamp.stillsetTimecode)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            .foregroundStyle(StillsetStyle.muted.opacity(0.65))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Capture \(index + 1), \(occurrence.state.representativeTimestamp.stillsetTimecode)")
+            .accessibilityValue("En attente")
+            .accessibilityHidden(occurrence.capture != nil)
+
+            if let screenshot = occurrence.capture {
+                ScreenshotPreview(
+                    url: screenshot.fileURL,
+                    maxPixelSize: 180,
+                    occurrenceID: occurrence.id,
+                    showsLoadingIndicator: false,
+                    previewReduceMotion: previewReduceMotion
+                )
+            }
+        }
+        .frame(width: width, height: 112)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(
+                    isSelected ? StillsetStyle.accent : StillsetStyle.border.opacity(0.55),
+                    lineWidth: isSelected ? 2 : 0.5
+                )
+        }
+        .padding(3)
+        .background {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(StillsetStyle.accent.opacity(0.13))
+            }
+        }
+    }
+}
+
+private struct TimelineEmptyState: View {
+    var body: some View {
+        Text("Les écrans détectés apparaîtront ici.")
+            .font(.caption)
+            .foregroundStyle(StillsetStyle.muted)
+    }
+}
+
+private struct StageProgressBar: View {
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
-    let progress: AnalysisProgress
-    var isAnalyzing = false
-    var screens: [UIState] = []
-    var duration: TimeInterval = 0
-    var screenshots: [CapturedScreenshot] = []
-    var videoAspectRatio: CGFloat = 9.0 / 19.0
-    var reducesMotionInPreview = false
+    let fraction: Double
+    var previewReduceMotion = false
 
     private var reduceMotion: Bool {
-        systemReduceMotion || reducesMotionInPreview
+        previewReduceMotion || systemReduceMotion
     }
 
     private var stageFraction: Double {
-        progress.fraction.isFinite ? min(1, max(0, progress.fraction)) : 0
-    }
-
-    private var temporalFraction: Double {
-        guard !screens.isEmpty else { return stageFraction }
-        switch progress.stage {
-        case .exporting, .annotating, .complete:
-            return 1
-        default:
-            return stageFraction
-        }
+        fraction.isFinite ? min(1, max(0, fraction)) : 0
     }
 
     var body: some View {
-        let fraction = temporalFraction
-        let capturesByID = Dictionary(uniqueKeysWithValues: screenshots.map { ($0.id, $0) })
-        let readyCount = screens.filter { capturesByID[$0.id] != nil }.count
         GeometryReader { geometry in
-            let layout = ProgressRailLayout(
-                screens: screens, duration: duration, width: geometry.size.width, aspectRatio: videoAspectRatio
-            )
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(StillsetStyle.ink.opacity(0.12))
-                    .frame(width: layout.trackWidth, height: 4)
-                    .offset(x: layout.inset)
-
-                Capsule()
-                    .fill(StillsetStyle.accent)
-                    .frame(width: layout.trackWidth * fraction, height: 4)
-                    .offset(x: layout.inset)
-                    .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: fraction)
-
-                ForEach(screens) { screen in
-                    let screenshot = capturesByID[screen.id]
-                    ProgressRailMarker(
-                        id: screen.id,
-                        screenshot: screenshot,
-                        canExpand: layout.eligibleIDs.contains(screen.id),
-                        targetSize: layout.targetSize,
-                        reduceMotion: reduceMotion
-                    )
-                        .position(x: layout.centers[screen.id] ?? layout.inset, y: geometry.size.height / 2)
-                        .transition(reduceMotion ? .identity : .opacity)
-                        .zIndex(screenshot == nil ? 1 : 0)
-                }
-
-                if progress.stage == .decoding && fraction > 0 && fraction < 1 {
-                    Circle()
+            Capsule()
+                .fill(StillsetStyle.ink.opacity(0.12))
+                .overlay(alignment: .leading) {
+                    Capsule()
                         .fill(StillsetStyle.accent)
-                        .frame(width: 6, height: 6)
-                        .background {
-                            Circle()
-                                .fill(StillsetStyle.accent.opacity(0.12))
-                                .frame(width: 10, height: 10)
-                        }
-                        .position(x: layout.inset + layout.trackWidth * fraction, y: geometry.size.height / 2)
-                        .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: fraction)
-                        .zIndex(2)
+                        .frame(width: geometry.size.width * stageFraction)
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: stageFraction)
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: screens.count)
         }
-        .frame(height: isAnalyzing ? 56 : 18)
-        .transaction { if reduceMotion { $0.animation = nil } }
+        .frame(height: 4)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Progression")
-        .accessibilityValue("\(Int(stageFraction * 100)) %, \(screens.count) écrans détectés, \(readyCount) captures prêtes")
+        .accessibilityValue(stageFraction.formatted(.percent.precision(.fractionLength(0))))
     }
 }
 
-private struct ProgressRailLayout {
-    let targetSize: CGSize
-    let inset: CGFloat
-    let trackWidth: CGFloat
-    let centers: [UUID: CGFloat]
-    let eligibleIDs: Set<UUID>
-
-    init(screens: [UIState], duration: TimeInterval, width: CGFloat, aspectRatio: CGFloat) {
-        let ratio = aspectRatio.isFinite && aspectRatio > 0 ? aspectRatio : 9.0 / 19.0
-        let height = min(52, 40 / ratio)
-        let targetSize = CGSize(width: height * ratio, height: height)
-        let inset = min(targetSize.width / 2, width / 2)
-        let trackWidth = max(0, width - inset * 2)
-        let positions: [(id: UUID, center: CGFloat)] = screens.map { screen in
-            let fraction = duration.isFinite && duration > 0 && screen.representativeTimestamp.isFinite
-                ? min(1, max(0, screen.representativeTimestamp / duration)) : 0
-            return (id: screen.id, center: inset + trackWidth * CGFloat(fraction))
-        }.sorted { $0.center < $1.center }
-        let eligibleIDs = Set(positions.indices.filter { index in
-            width >= targetSize.width
-                && (index == positions.startIndex || positions[index].center - positions[index - 1].center >= targetSize.width + 4)
-                && (index == positions.index(before: positions.endIndex) || positions[index + 1].center - positions[index].center >= targetSize.width + 4)
-        }.map { positions[$0].id })
-        self.targetSize = targetSize
-        self.inset = inset
-        self.trackWidth = trackWidth
-        self.centers = Dictionary(uniqueKeysWithValues: positions.map { ($0.id, $0.center) })
-        self.eligibleIDs = eligibleIDs
-    }
+#Preview("Timeline · clair et sombre") {
+    OccurrenceTimelinePreview()
 }
 
-private struct ProgressRailMarker: View {
-    let id: UUID
-    let screenshot: CapturedScreenshot?
-    let canExpand: Bool
-    let targetSize: CGSize
-    let reduceMotion: Bool
-    @State private var loadedOccurrenceID: UUID?
-
-    private var isCaptured: Bool {
-        screenshot != nil
-    }
-
-    private var isExpanded: Bool {
-        canExpand && isCaptured && loadedOccurrenceID == id
-    }
-
-    private var markerSize: CGSize {
-        isExpanded ? targetSize : CGSize(width: isCaptured ? 11 : 8, height: isCaptured ? 15 : 11)
-    }
-
-    private var cornerRadius: CGFloat {
-        isExpanded ? 5 : 3
-    }
-
-    private var borderWidth: CGFloat {
-        isExpanded ? 1 : isCaptured ? 1.5 : 1
-    }
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .fill(StillsetStyle.surface)
-            .frame(width: markerSize.width, height: markerSize.height)
-            .overlay {
-                RoundedRectangle(cornerRadius: 1, style: .continuous)
-                    .fill(StillsetStyle.accent.opacity(0.18))
-                    .frame(width: 5, height: 7)
-                    .offset(y: -1)
-                    .opacity(isCaptured && !isExpanded ? 1 : 0)
-            }
-            .overlay { thumbnail }
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(StillsetStyle.accent.opacity(isCaptured ? 1 : 0.55), lineWidth: borderWidth)
-            }
-            .shadow(color: .black.opacity(isExpanded ? 0.1 : 0), radius: 3, y: 1)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.28), value: markerSize)
-            .onChange(of: canExpand) { _, canExpand in
-                if !canExpand { loadedOccurrenceID = nil }
-            }
-            .onChange(of: screenshot?.id) { _, capturedID in
-                if capturedID != loadedOccurrenceID { loadedOccurrenceID = nil }
-            }
-    }
-
-    @ViewBuilder
-    private var thumbnail: some View {
-        if canExpand, let screenshot {
-            ScreenshotPreview(
-                url: screenshot.fileURL,
-                maxPixelSize: 104,
-                occurrenceID: id,
-                showsLoadingIndicator: false,
-                usesParentAnimation: true,
-                onImageLoaded: { loadedID in
-                    guard loadedID == id, loadedOccurrenceID != loadedID else { return }
-                    loadedOccurrenceID = loadedID
-                }
-            )
-            .frame(width: targetSize.width, height: targetSize.height)
-            .opacity(isExpanded ? 1 : 0)
-        }
-    }
+#Preview("Timeline · mouvement réduit") {
+    OccurrenceTimelinePreview(previewReduceMotion: true)
 }
 
-#Preview("Progression · clair et sombre") {
-    ProgressRailPreview()
+#Preview("Timeline · paysage étroit") {
+    OccurrenceTimelinePreview(aspectRatio: 16.0 / 9.0, previewWidth: 320, previewReduceMotion: true)
 }
 
-#Preview("Progression · mouvement réduit") {
-    ProgressRailPreview(reducedMotion: true)
+#Preview("Timeline · portrait étroit") {
+    OccurrenceTimelinePreview(previewWidth: 320)
 }
 
-private struct ProgressRailPreview: View {
-    var reducedMotion = false
+private struct OccurrenceTimelinePreview: View {
+    var aspectRatio: CGFloat = 9.0 / 19.0
+    var previewWidth: CGFloat = 540
+    var previewReduceMotion = false
 
     private static let sparse = [0, 0.16, 0.5, 0.78, 1].map { timestamp in
         UIState(interval: timestamp..<(timestamp + 0.04), representativeTimestamp: timestamp, stabilityScore: 1)
     }
-
     private static let dense = (0..<24).map { index in
         let timestamp = 0.4 + Double(index) * 0.007
         return UIState(interval: timestamp..<(timestamp + 0.004), representativeTimestamp: timestamp, stabilityScore: 1)
     }
+    private static let portraitSparseCaptures = TimelinePreviewImages.captures(for: sparse)
+    private static let portraitDenseCaptures = TimelinePreviewImages.captures(for: dense)
+    private static let landscapeSparseCaptures = TimelinePreviewImages.captures(for: sparse, aspectRatio: 16.0 / 9.0)
+    private static let landscapeDenseCaptures = TimelinePreviewImages.captures(for: dense, aspectRatio: 16.0 / 9.0)
 
-    private static let sparseCaptures = ProgressRailPreviewImages.captures(for: sparse)
-    private static let denseCaptures = ProgressRailPreviewImages.captures(for: dense)
+    private var sparseCaptures: [CapturedScreenshot] {
+        aspectRatio > 1 ? Self.landscapeSparseCaptures : Self.portraitSparseCaptures
+    }
+
+    private var denseCaptures: [CapturedScreenshot] {
+        aspectRatio > 1 ? Self.landscapeDenseCaptures : Self.portraitDenseCaptures
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             ForEach([ColorScheme.light, .dark], id: \.self) { scheme in
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Recherche · repères espacés")
-                    ProgressRail(
-                        progress: AnalysisProgress(stage: .decoding, fraction: 0.63, detail: "Recherche d’écrans"),
-                        isAnalyzing: true,
-                        screens: Self.sparse, duration: 1, reducesMotionInPreview: reducedMotion
-                    )
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Recherche d’écrans…")
+                    strip(screens: [], captures: [])
+                    StageProgressBar(fraction: 0, previewReduceMotion: previewReduceMotion)
+                    Text("Recherche · écrans détectés")
+                    strip(screens: Self.sparse, captures: [])
+                    StageProgressBar(fraction: 0.63, previewReduceMotion: previewReduceMotion)
                     Text("Captures · ordre indépendant")
-                    ProgressRail(
-                        progress: AnalysisProgress(stage: .exporting, fraction: 0.4, detail: "Création des captures"),
-                        isAnalyzing: true,
-                        screens: Self.sparse, duration: 1,
-                        screenshots: [Self.sparseCaptures[3], Self.sparseCaptures[0]],
-                        reducesMotionInPreview: reducedMotion
+                    strip(screens: Self.sparse, captures: [sparseCaptures[3], sparseCaptures[0]])
+                    StageProgressBar(fraction: 0.4, previewReduceMotion: previewReduceMotion)
+                    Text("Repérage · captures prêtes")
+                    strip(screens: Self.sparse, captures: sparseCaptures)
+                    StageProgressBar(fraction: 0.35, previewReduceMotion: previewReduceMotion)
+                    Text("Captures · écrans rapprochés")
+                    strip(
+                        screens: Self.dense,
+                        captures: denseCaptures.enumerated().filter { $0.offset.isMultiple(of: 2) }.map(\.element)
                     )
-                    Text("Repérage · rail temporel complet")
-                    ProgressRail(
-                        progress: AnalysisProgress(stage: .annotating, fraction: 0.35, detail: "Repérage des écrans"),
-                        isAnalyzing: true,
-                        screens: Self.sparse, duration: 1,
-                        screenshots: Self.sparseCaptures, reducesMotionInPreview: reducedMotion
-                    )
-                    Text("Captures · repères rapprochés")
-                    ProgressRail(
-                        progress: AnalysisProgress(stage: .exporting, fraction: 0.5, detail: "Création des captures"),
-                        isAnalyzing: true,
-                        screens: Self.dense, duration: 1,
-                        screenshots: Self.denseCaptures.enumerated().filter { $0.offset.isMultiple(of: 2) }.map(\.element),
-                        reducesMotionInPreview: reducedMotion
-                    )
-                    Text("Export de la sélection")
-                    ProgressRail(
-                        progress: AnalysisProgress(stage: .exporting, fraction: 0.35, detail: "Export de la sélection"),
-                        reducesMotionInPreview: reducedMotion
-                    )
+                    StageProgressBar(fraction: 0.5, previewReduceMotion: previewReduceMotion)
                 }
                 .font(.caption)
                 .foregroundStyle(StillsetStyle.muted)
-                .padding(28)
+                .padding(20)
                 .background(StillsetStyle.surface)
                 .environment(\.colorScheme, scheme)
             }
         }
-        .frame(width: 540)
+        .frame(width: previewWidth)
+    }
+
+    private func strip(screens: [UIState], captures: [CapturedScreenshot]) -> some View {
+        let occurrences = TimelineOccurrence.analyzing(screens: screens, screenshots: captures)
+        return ScrollView(.horizontal) {
+            LazyHStack(spacing: 12) {
+                ForEach(Array(occurrences.enumerated()), id: \.element.id) { index, occurrence in
+                    TimelineOccurrenceCell(
+                        occurrence: occurrence,
+                        index: index,
+                        width: min(160, max(48, 112 * aspectRatio)),
+                        isSelected: occurrence.id == captures.first?.id,
+                        previewReduceMotion: previewReduceMotion
+                    )
+                    .id(occurrence.id)
+                }
+            }
+            .padding(3)
+        }
+        .overlay {
+            if occurrences.isEmpty { TimelineEmptyState() }
+        }
+        .scrollIndicators(.hidden)
+        .frame(height: 138)
     }
 }
 
-private enum ProgressRailPreviewImages {
+private enum TimelinePreviewImages {
     private static let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent("StillsetProgressRailPreview-\(UUID().uuidString)", isDirectory: true)
+        .appendingPathComponent("StillsetTimelinePreview-\(UUID().uuidString)", isDirectory: true)
 
-    static func captures(for screens: [UIState]) -> [CapturedScreenshot] {
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    static func captures(for screens: [UIState], aspectRatio: CGFloat = 9.0 / 19.0) -> [CapturedScreenshot] {
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        } catch {
+            preconditionFailure("Impossible de créer les images de prévisualisation : \(error)")
+        }
         return screens.enumerated().map { index, screen in
-            let url = directory.appendingPathComponent("\(screen.id.uuidString).png")
-            if let image = image(index: index),
-               let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) {
-                CGImageDestinationAddImage(destination, image, nil)
-                _ = CGImageDestinationFinalize(destination)
+            let url = directory.appendingPathComponent("\(screen.id.uuidString)-\(aspectRatio).png")
+            guard let image = image(index: index, aspectRatio: aspectRatio),
+                  let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
+                preconditionFailure("Impossible de préparer une image de prévisualisation")
+            }
+            CGImageDestinationAddImage(destination, image, nil)
+            guard CGImageDestinationFinalize(destination) else {
+                preconditionFailure("Impossible d’écrire une image de prévisualisation")
             }
             return CapturedScreenshot(state: screen, fileURL: url)
         }
     }
 
-    private static func image(index: Int) -> CGImage? {
+    private static func image(index: Int, aspectRatio: CGFloat) -> CGImage? {
+        let width = max(1, Int(220 * aspectRatio))
         guard let context = CGContext(
-            data: nil, width: 104, height: 220, bitsPerComponent: 8, bytesPerRow: 104 * 4,
+            data: nil, width: width, height: 220, bitsPerComponent: 8, bytesPerRow: width * 4,
             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return nil }
+        context.scaleBy(x: CGFloat(width) / 104, y: 1)
         let hue = CGFloat(index % 5) / 5
         context.setFillColor(CGColor(red: 0.92, green: 0.94, blue: 0.97, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: 104, height: 220))
