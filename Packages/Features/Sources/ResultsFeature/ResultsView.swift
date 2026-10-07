@@ -96,7 +96,7 @@ struct ResultsView: View {
                 Text(screen.name)
                     .font(.headline)
                     .foregroundStyle(StillsetStyle.muted)
-                    .lineLimit(2)
+                    .lineLimit(2, reservesSpace: true)
                     .frame(maxWidth: 500)
                     .help("Nom d’écran proposé automatiquement")
             }
@@ -200,21 +200,27 @@ struct ResultsView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: model.notice)
     }
 
-    private var timelineOccurrences: [TimelineOccurrence] {
+    private var allTimelineOccurrences: [TimelineOccurrence] {
         if model.isAnalyzing {
             return TimelineOccurrence.analyzing(screens: model.detectedScreens, screenshots: model.screenshots)
         }
-        return model.visibleScreenshots.map { TimelineOccurrence(state: $0.state, capture: $0) }
+        return model.screenshots.map { TimelineOccurrence(state: $0.state, capture: $0) }
     }
 
     private var timeline: some View {
         let thumbnailWidth = min(160, max(48, 112 * videoAspectRatio))
-        let occurrences = timelineOccurrences
+        let occurrences = allTimelineOccurrences
+        let visibleIDs = model.isAnalyzing ? occurrences.map(\.id) : model.visibleScreenshots.map(\.id)
+        let visibleRanks = Dictionary(uniqueKeysWithValues: visibleIDs.enumerated().map { ($0.element, $0.offset) })
 
         return ScrollViewReader { proxy in
             ScrollView(.horizontal) {
-                LazyHStack(spacing: 12) {
-                    ForEach(Array(occurrences.enumerated()), id: \.element.id) { index, occurrence in
+                HStack(spacing: 0) {
+                    ForEach(occurrences) { occurrence in
+                        let visibleRank = visibleRanks[occurrence.id]
+                        let isVisible = visibleRank != nil
+                        let index = visibleRank ?? 0
+                        let trailingGap: CGFloat = occurrence.id == visibleIDs.last ? 0 : 12
                         let isSelected = model.selectedScreenshotIDs.contains(occurrence.id)
                         let screen = model.screenClassifications[occurrence.id]
                         TimelineOccurrenceCell(
@@ -223,8 +229,12 @@ struct ResultsView: View {
                             width: thumbnailWidth,
                             isSelected: isSelected
                         )
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Capture \(index + 1), \(occurrence.state.representativeTimestamp.stillsetTimecode)")
+                        .accessibilityValue("En attente")
+                        .accessibilityHidden(!isVisible || occurrence.capture != nil)
                         .overlay {
-                            if let screenshot = occurrence.capture {
+                            if isVisible, let screenshot = occurrence.capture {
                                 TimelineDragView(
                                     fileURLs: model.dragURLs(startingAt: screenshot.id),
                                     accessibilityText: "Capture \(index + 1), \(screenshot.state.representativeTimestamp.stillsetTimecode)\(isSelected ? ", sélectionnée" : "")\(screen.map { ", écran \($0.screenID), \($0.name)" } ?? "")",
@@ -234,26 +244,27 @@ struct ResultsView: View {
                             }
                         }
                         .help(screen.map { "Écran \($0.screenID) · \($0.name) · \(occurrence.state.representativeTimestamp.stillsetTimecode)" } ?? occurrence.state.representativeTimestamp.stillsetTimecode)
+                        .frame(width: isVisible ? thumbnailWidth + 6 + trailingGap : 0, height: 136, alignment: .leading)
+                        .clipped()
+                        .opacity(isVisible ? 1 : 0)
+                        .allowsHitTesting(isVisible)
                         .id(occurrence.id)
-                        .transition(reduceMotion ? .identity : .opacity)
                     }
                 }
                 .padding(.horizontal, 24)
                 .padding(.vertical, 10)
             }
             .overlay {
-                if occurrences.isEmpty {
+                if visibleIDs.isEmpty {
                     TimelineEmptyState()
                 }
             }
-            .scrollIndicators(.hidden)
+            .scrollIndicators(.never)
             .frame(height: 158)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: occurrences.map(\.id))
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: model.screenshots.count)
-            .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: model.selectedScreenshotIDs)
+            .animation(reduceMotion ? nil : .smooth(duration: 0.36), value: visibleIDs)
             .onChange(of: model.detectedScreens.count) {
                 if model.isAnalyzing, model.followsLatest, let last = model.detectedScreens.last,
-                   occurrences.contains(where: { $0.id == last.id }) {
+                   visibleRanks[last.id] != nil {
                     withAnimation(reduceMotion ? nil : .smooth(duration: 0.4)) {
                         proxy.scrollTo(last.id, anchor: .trailing)
                     }
@@ -261,7 +272,7 @@ struct ResultsView: View {
             }
             .onChange(of: model.screenshots.count) {
                 if model.followsLatest, let last = model.screenshots.last,
-                   occurrences.contains(where: { $0.id == last.id }) {
+                   visibleRanks[last.id] != nil {
                     withAnimation(reduceMotion ? nil : .smooth(duration: 0.4)) {
                         proxy.scrollTo(last.id, anchor: .trailing)
                     }
@@ -269,7 +280,7 @@ struct ResultsView: View {
             }
             .onChange(of: model.focusNavigationID) { _, focusedID in
                 if let focusedID,
-                   occurrences.contains(where: { $0.id == focusedID }) {
+                   visibleRanks[focusedID] != nil {
                     withAnimation(reduceMotion ? nil : .smooth(duration: 0.3)) {
                         proxy.scrollTo(focusedID)
                     }
@@ -428,11 +439,17 @@ private struct TimelineOccurrence: Identifiable {
 }
 
 private struct TimelineOccurrenceCell: View {
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+
     let occurrence: TimelineOccurrence
     let index: Int
     let width: CGFloat
     var isSelected = false
     var previewReduceMotion = false
+
+    private var reduceMotion: Bool {
+        previewReduceMotion || systemReduceMotion
+    }
 
     var body: some View {
         VStack(spacing: 6) {
@@ -472,6 +489,7 @@ private struct TimelineOccurrenceCell: View {
                         .fill(StillsetStyle.accent.opacity(0.13))
                 }
             }
+            .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: isSelected)
 
             Text(occurrence.state.representativeTimestamp.stillsetTimecode)
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
@@ -546,32 +564,44 @@ private struct StageProgressBar: View {
     ResultsRecognitionPreview(completed: false)
 }
 
-#Preview("Résultats · organisation terminée") {
-    ResultsRecognitionPreview(completed: true)
+#Preview("Résultats · sélection conservée") {
+    ResultsRecognitionPreview(completed: true, focusesRepeat: false)
+}
+
+#Preview("Résultats · sélection remplacée") {
+    ResultsRecognitionPreview(completed: true, focusesRepeat: true)
 }
 
 private struct ResultsRecognitionPreview: View {
     @State private var model: AppModel
+    private let focusesRepeat: Bool
 
-    private static let screens = (0..<8).map { index in
+    private static let screens = (0..<24).map { index in
         let timestamp = Double(index) * 3
-        return UIState(interval: timestamp..<(timestamp + 1), representativeTimestamp: timestamp, stabilityScore: 1)
+        return UIState(
+            id: UUID(uuidString: "00000000-0000-0000-0000-\(String(format: "%012d", index + 1))")!,
+            interval: timestamp..<(timestamp + 1),
+            representativeTimestamp: timestamp,
+            stabilityScore: 1
+        )
     }
     private static let captures = TimelinePreviewImages.captures(for: screens)
-    private static let classifications = Dictionary(uniqueKeysWithValues: zip(screens, [1, 1, 2, 2, 3, 3, 4, 2]).map { screen, stateID in
-        let names = ["Accueil", "Compte", "Réglages", "Confirmation"]
+    private static let classifications = Dictionary(uniqueKeysWithValues: screens.enumerated().map { index, screen in
+        let stateID = [1, 1, 2, 2, 3, 3, 4, 2][index % 8]
+        let names = ["Accueil", "Compte", "Réglages des notifications et des préférences de confidentialité du compte", "Confirmation"]
         return (screen.id, ScreenClassification(screenID: stateID, name: names[stateID - 1], stateID: stateID))
     })
 
-    init(completed: Bool) {
+    init(completed: Bool, focusesRepeat: Bool = true) {
+        self.focusesRepeat = focusesRepeat
         let model = AppModel()
         model.detectedScreens = Self.screens
         model.screenshots = Self.captures
-        model.selectScreenshot(Self.captures[7].id, modifiers: [])
         if completed {
             model.screenClassifications = Self.classifications
-            model.setUniqueScreens(model.showsUniqueScreens)
+            model.setUniqueScreens(false)
         }
+        model.selectScreenshot(Self.captures[focusesRepeat ? Self.captures.count - 1 : 4].id, modifiers: [])
         model.setPreviewAnalysisRunning(!completed)
         _model = State(initialValue: model)
     }
@@ -586,7 +616,7 @@ private struct ResultsRecognitionPreview: View {
                         model.setPreviewAnalysisRunning(false)
                     } else {
                         model.screenClassifications = [:]
-                        model.selectScreenshot(Self.captures[7].id, modifiers: [])
+                        model.selectScreenshot(Self.captures[focusesRepeat ? Self.captures.count - 1 : 4].id, modifiers: [])
                         model.setPreviewAnalysisRunning(true)
                     }
                 }
@@ -679,7 +709,7 @@ private struct OccurrenceTimelinePreview: View {
         .overlay {
             if occurrences.isEmpty { TimelineEmptyState() }
         }
-        .scrollIndicators(.hidden)
+        .scrollIndicators(.never)
         .frame(height: 158)
     }
 }

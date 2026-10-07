@@ -24,7 +24,7 @@ struct ScreenshotPreview: View {
     var body: some View {
         imageContent
             .animation(
-                occurrenceID == nil || reduceMotion ? nil : .easeOut(duration: animatesCaptureArrival ? 0.2 : 0.14),
+                occurrenceID == nil || reduceMotion ? nil : (animatesCaptureArrival ? .easeOut(duration: 0.2) : .easeInOut(duration: 0.24)),
                 value: loadedImage?.occurrenceID
             )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
