@@ -77,19 +77,14 @@ struct ResultsView: View {
             ? "écran\(count == 1 ? "" : "s") unique\(count == 1 ? "" : "s")"
             : "capture\(count == 1 ? "" : "s") trouvée\(count == 1 ? "" : "s")"
         return VStack(spacing: 8) {
-            HStack(spacing: 5) {
-                Text(count.formatted())
-                    .monospacedDigit()
-                    .contentTransition(reduceMotion ? .identity : .numericText())
-                Text(countLabel)
-                    .id(countLabel)
-                    .transition(reduceMotion ? .identity : .opacity)
-            }
-            .font(.system(size: 24, weight: .semibold))
-            .foregroundStyle(StillsetStyle.ink)
-            .animation(reduceMotion ? nil : .snappy(duration: 0.35), value: count)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: countLabel)
-            .accessibilityElement(children: .combine)
+            Text("\(count.formatted()) \(countLabel)")
+                .monospacedDigit()
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(StillsetStyle.ink)
+                .multilineTextAlignment(.center)
+                .contentTransition(.identity)
+                .transaction { $0.animation = nil }
+                .accessibilityElement(children: .combine)
 
             if let focused = model.focusedScreenshot,
                let screen = model.screenClassifications[focused.id] {
@@ -244,9 +239,11 @@ struct ResultsView: View {
                             }
                         }
                         .help(screen.map { "Écran \($0.screenID) · \($0.name) · \(occurrence.state.representativeTimestamp.stillsetTimecode)" } ?? occurrence.state.representativeTimestamp.stillsetTimecode)
-                        .frame(width: isVisible ? thumbnailWidth + 6 + trailingGap : 0, height: 136, alignment: .leading)
-                        .clipped()
+                        .compositingGroup()
                         .opacity(isVisible ? 1 : 0)
+                        .geometryGroup()
+                        .frame(width: isVisible ? thumbnailWidth + 6 + trailingGap : 0, height: 136, alignment: .leading)
+                        .contentShape(Rectangle())
                         .allowsHitTesting(isVisible)
                         .id(occurrence.id)
                     }

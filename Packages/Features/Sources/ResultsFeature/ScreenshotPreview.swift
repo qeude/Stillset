@@ -28,7 +28,6 @@ struct ScreenshotPreview: View {
                 value: loadedImage?.occurrenceID
             )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .transaction { $0.animation = nil }
         .task(id: url) {
             let sourceURL = url
             let pixelSize = maxPixelSize
