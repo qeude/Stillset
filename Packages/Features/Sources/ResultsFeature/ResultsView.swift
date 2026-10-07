@@ -244,7 +244,7 @@ struct ResultsView: View {
                 }
             }
             .scrollIndicators(.hidden)
-            .frame(height: 138)
+            .frame(height: 158)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: model.detectedScreens.count)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: model.screenshots.count)
             .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: model.selectedScreenshotIDs)
@@ -429,48 +429,54 @@ private struct TimelineOccurrenceCell: View {
     var previewReduceMotion = false
 
     var body: some View {
-        ZStack {
-            StillsetStyle.surface
-            VStack(spacing: 8) {
+        VStack(spacing: 6) {
+            ZStack {
+                StillsetStyle.surface
                 Image(systemName: "photo")
                     .font(.system(size: 16, weight: .light))
-                Text(occurrence.state.representativeTimestamp.stillsetTimecode)
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-            }
-            .foregroundStyle(StillsetStyle.muted.opacity(0.65))
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Capture \(index + 1), \(occurrence.state.representativeTimestamp.stillsetTimecode)")
-            .accessibilityValue("En attente")
-            .accessibilityHidden(occurrence.capture != nil)
+                    .foregroundStyle(StillsetStyle.muted.opacity(0.65))
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Capture \(index + 1), \(occurrence.state.representativeTimestamp.stillsetTimecode)")
+                    .accessibilityValue("En attente")
+                    .accessibilityHidden(occurrence.capture != nil)
 
-            if let screenshot = occurrence.capture {
-                ScreenshotPreview(
-                    url: screenshot.fileURL,
-                    maxPixelSize: 180,
-                    occurrenceID: occurrence.id,
-                    showsLoadingIndicator: false,
-                    previewReduceMotion: previewReduceMotion
-                )
+                if let screenshot = occurrence.capture {
+                    ScreenshotPreview(
+                        url: screenshot.fileURL,
+                        maxPixelSize: 180,
+                        occurrenceID: occurrence.id,
+                        showsLoadingIndicator: false,
+                        previewReduceMotion: previewReduceMotion
+                    )
+                }
             }
-        }
-        .frame(width: width, height: 112)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(
-                    isSelected ? StillsetStyle.accent : StillsetStyle.border.opacity(0.55),
-                    lineWidth: isSelected ? 2 : 0.5
-                )
-        }
-        .padding(3)
-        .background {
-            if isSelected {
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(StillsetStyle.accent.opacity(0.13))
+            .frame(width: width, height: 112)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(
+                        isSelected ? StillsetStyle.accent : StillsetStyle.border.opacity(0.55),
+                        lineWidth: isSelected ? 2 : 0.5
+                    )
             }
+            .padding(3)
+            .background {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(StillsetStyle.accent.opacity(0.13))
+                }
+            }
+
+            Text(occurrence.state.representativeTimestamp.stillsetTimecode)
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundStyle(StillsetStyle.muted)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .padding(.horizontal, 3)
+                .frame(height: 12)
+                .accessibilityHidden(true)
         }
+        .frame(width: width + 6)
     }
 }
 
@@ -608,7 +614,7 @@ private struct OccurrenceTimelinePreview: View {
             if occurrences.isEmpty { TimelineEmptyState() }
         }
         .scrollIndicators(.hidden)
-        .frame(height: 138)
+        .frame(height: 158)
     }
 }
 
