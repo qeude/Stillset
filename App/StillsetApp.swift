@@ -3,7 +3,14 @@ import StillsetFeatures
 
 @main
 struct StillsetApp: App {
-    @State private var model = AppModel()
+    @State private var preferences: AppPreferences
+    @State private var model: AppModel
+
+    init() {
+        let preferences = AppPreferences(defaults: .standard)
+        _preferences = State(initialValue: preferences)
+        _model = State(initialValue: AppModel(preferences: preferences))
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -29,6 +36,10 @@ struct StillsetApp: App {
                     .keyboardShortcut("s", modifiers: .command)
                     .disabled(!model.canSaveSelection)
             }
+        }
+
+        Settings {
+            SettingsView(preferences: preferences)
         }
     }
 }
