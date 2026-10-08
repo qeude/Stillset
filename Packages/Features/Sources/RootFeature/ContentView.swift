@@ -40,6 +40,14 @@ public struct StillsetRootView: View {
                     }
                 }
                 ToolbarItem(placement: .automatic) {
+                    Button("Réanalyser", systemImage: "arrow.clockwise", action: model.reanalyze)
+                        .labelStyle(.iconOnly)
+                        .accessibilityLabel("Réanalyser la vidéo actuelle")
+                        .help("Réanalyser la vidéo actuelle")
+                        .disabled(model.isWorking || model.videoURL == nil)
+                }
+                .visibilityPriority(.low)
+                ToolbarItem(placement: .automatic) {
                     Button("Affiner avec l’IA…", systemImage: "sparkles", action: model.refineScreens)
                         .labelStyle(.iconOnly)
                         .accessibilityLabel("Affiner avec l’IA…")
