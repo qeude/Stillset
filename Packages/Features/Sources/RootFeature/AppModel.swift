@@ -10,6 +10,12 @@ struct CapturedScreenshot: Identifiable {
     var id: UUID { state.id }
 }
 
+struct TimelineScreenGroup: Identifiable {
+    let id: Int?
+    let name: String
+    let screenshots: [CapturedScreenshot]
+}
+
 @MainActor
 @Observable
 public final class AppModel {
@@ -18,6 +24,7 @@ public final class AppModel {
     private let screenCatalogAnalyzer = ScreenCatalogAnalyzer()
     var screenClassifications: [UUID: ScreenClassification] = [:]
     private(set) var showsUniqueScreens = true
+    private(set) var groupsTimelineByScreen = false
     private(set) var selectedScreenshotIDs: Set<UUID> = []
     private(set) var selectedScreenshotOrder: [UUID] = []
     var focusedScreenshotID: UUID?
@@ -34,13 +41,19 @@ public final class AppModel {
     var exportedFolderURL: URL?
     var followsLatest = true
 
+    private let preferences: AppPreferences
+    private var exportToken: UUID?
     private var workTask: Task<Void, Never>?
     private var refinementTask: Task<Void, Never>?
     private var stagingFolderURL: URL?
     private var selectionAnchorID: UUID?
     private var fanSlots: [UUID: Int] = [:]
 
-    public init() {}
+    public init(preferences: AppPreferences) {
+        self.preferences = preferences
+        showsUniqueScreens = preferences.captureDefault == .uniques
+        groupsTimelineByScreen = preferences.organisationDefault == .byScreen
+    }
 
     #if DEBUG
     func setPreviewAnalysisRunning(_ running: Bool) {
@@ -64,13 +77,36 @@ public final class AppModel {
         screenshots.first { $0.id == focusedScreenshotID }
     }
 
-    var visibleScreenshots: [CapturedScreenshot] {
+    private var filteredScreenshots: [CapturedScreenshot] {
         guard showsUniqueScreens else { return screenshots }
         var seen: Set<Int> = []
         return screenshots.filter { screenshot in
             guard let screen = screenClassifications[screenshot.id] else { return true }
             return seen.insert(screen.stateID).inserted
         }
+    }
+
+    var timelineScreenGroups: [TimelineScreenGroup] {
+        let captures = filteredScreenshots
+        let byScreen = Dictionary(grouping: captures) { screenClassifications[$0.id]?.screenID }
+        var seen: Set<Int?> = []
+        return captures.compactMap { capture in
+            let screen = screenClassifications[capture.id]
+            guard seen.insert(screen?.screenID).inserted else { return nil }
+            return TimelineScreenGroup(id: screen?.screenID, name: screen?.name ?? "À identifier",
+                                       screenshots: byScreen[screen?.screenID, default: []])
+        }
+    }
+
+    var visibleScreenshots: [CapturedScreenshot] {
+        groupsTimelineByScreen ? timelineScreenGroups.flatMap(\.screenshots) : filteredScreenshots
+    }
+
+    func setTimelineGrouping(_ enabled: Bool) {
+        groupsTimelineByScreen = enabled
+        selectionAnchorID = focusedScreenshotID
+        focusNavigationID = focusedScreenshotID
+        followsLatest = false
     }
 
     func setUniqueScreens(_ enabled: Bool) {
@@ -131,7 +167,8 @@ public final class AppModel {
         stagingFolderURL = nil
         screenshots = []
         screenClassifications = [:]
-        showsUniqueScreens = true
+        showsUniqueScreens = preferences.captureDefault == .uniques
+        groupsTimelineByScreen = preferences.organisationDefault == .byScreen
         setSelection([])
         focusedScreenshotID = nil
         focusNavigationID = nil
@@ -357,6 +394,18 @@ public final class AppModel {
         }
     }
 
+    func selectTimelineScreenGroup(_ screenID: Int?) {
+        guard !isAnalyzing, groupsTimelineByScreen,
+              let group = timelineScreenGroups.first(where: { $0.id == screenID }),
+              let first = group.screenshots.first else { return }
+        setSelection(group.screenshots.map(\.id), resetFan: true)
+        focusedScreenshotID = first.id
+        selectionAnchorID = first.id
+        focusNavigationID = first.id
+        followsLatest = false
+        notice = nil
+    }
+
     public func selectAll() {
         let visible = visibleScreenshots
         guard !visible.isEmpty else { return }
@@ -417,31 +466,64 @@ public final class AppModel {
         }
     }
 
+    func makeSelectionExportPlan() -> ScreenshotExportPlan {
+        if groupsTimelineByScreen {
+            let groups = timelineScreenGroups.compactMap { group -> ScreenshotExportPlan.ScreenGroup? in
+                let files = group.screenshots.filter { selectedScreenshotIDs.contains($0.id) }.map(\.fileURL)
+                return files.isEmpty ? nil : .init(screenName: group.name, sourceURLs: files)
+            }
+            if preferences.screenExportLayout == .folders { return .screenFolders(groups) }
+            return .singleFolder(groups.flatMap { group in
+                group.sourceURLs.map { .init(sourceURL: $0, screenName: group.screenName) }
+            })
+        }
+        return .singleFolder(visibleScreenshots.filter { selectedScreenshotIDs.contains($0.id) }.map {
+            .init(sourceURL: $0.fileURL, screenName: screenClassifications[$0.id]?.name ?? "À identifier")
+        })
+    }
+
     public func saveSelection() {
-        let files = selectedScreenshots.map(\.fileURL)
-        guard !files.isEmpty, !isWorking else { return }
+        guard !isWorking else { return }
+        let plan = makeSelectionExportPlan()
+        guard plan.fileCount > 0 else { return }
+        isWorking = true
+        let token = UUID()
+        exportToken = token
+        var transferredWork = false
+        defer {
+            if !transferredWork {
+                exportToken = nil
+                isWorking = false
+            }
+        }
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Enregistrer ici"
-        panel.message = "Choisissez un dossier pour \(files.count) PNG en pleine résolution."
+        let layout: String
+        switch plan {
+        case .singleFolder: layout = "dans un seul dossier, numérotés dans l’ordre de la timeline"
+        case .screenFolders: layout = "dans un dossier par écran, numérotés dans l’ordre de la timeline"
+        }
+        panel.message = "Choisissez un dossier pour \(plan.fileCount) PNG en pleine résolution, \(layout)."
         guard panel.runModal() == .OK, let folderURL = panel.url else { return }
 
         let model = self
-        isWorking = true
         notice = nil
         errorMessage = nil
         progress = AnalysisProgress(stage: .exporting, fraction: 0, detail: "Enregistrement des PNG")
         workTask = Task.detached(priority: .userInitiated) {
             do {
-                let copied = try ScreenshotExporter.copy(files: files, to: folderURL) { fraction, detail in
+                let copied = try ScreenshotExporter.copy(plan: plan, to: folderURL) { fraction, detail in
                     Task { @MainActor in
-                        guard model.isWorking, !model.isAnalyzing else { return }
+                        guard model.exportToken == token else { return }
                         model.progress = AnalysisProgress(stage: .exporting, fraction: fraction, detail: detail)
                     }
                 }
                 await MainActor.run {
+                    model.exportToken = nil
                     model.isWorking = false
                     model.workTask = nil
                     model.exportedFolderURL = folderURL
@@ -450,6 +532,7 @@ public final class AppModel {
                 }
             } catch is CancellationError {
                 await MainActor.run {
+                    model.exportToken = nil
                     model.isWorking = false
                     model.workTask = nil
                     model.progress = AnalysisProgress(stage: .cancelled, fraction: 0, detail: "Enregistrement annulé")
@@ -457,12 +540,14 @@ public final class AppModel {
             } catch {
                 let message = error.localizedDescription
                 await MainActor.run {
+                    model.exportToken = nil
                     model.isWorking = false
                     model.workTask = nil
                     model.errorMessage = message
                 }
             }
         }
+        transferredWork = true
     }
 
     func cancel() {

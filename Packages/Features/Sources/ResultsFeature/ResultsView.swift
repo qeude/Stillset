@@ -6,22 +6,42 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ResultsView: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     var model: AppModel
+    var previewReduceMotion = false
+
+    private var reduceMotion: Bool { systemReduceMotion || previewReduceMotion }
 
     var body: some View {
         VStack(spacing: 0) {
             preview
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            VStack(spacing: 10) {
-                status
-                progressFooter
+            if model.isAnalyzing || !model.screenshots.isEmpty {
+                ResultsTimelineHeader(model: model, reduceMotion: reduceMotion)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 16)
             }
-                .padding(.horizontal, 36)
-                .padding(.bottom, 16)
+
+            if model.isWorking || model.refinementDetail != nil || model.notice != nil {
+                progressFooter
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 16)
+            }
 
             if model.isAnalyzing || !model.screenshots.isEmpty {
+                if let focused = model.focusedScreenshot,
+                   let screen = model.screenClassifications[focused.id] {
+                    Text(verbatim: screen.name)
+                        .font(.system(size: 13))
+                        .foregroundStyle(StillsetStyle.muted)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .help("Nom de l’écran")
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, 8)
+                }
                 timeline
             }
         }
@@ -50,7 +70,7 @@ struct ResultsView: View {
                 }
 
                 if shouldShowScreenshotPreview {
-                    PhotoStackPreview(model: model, imageSize: imageSize)
+                    PhotoStackPreview(model: model, imageSize: imageSize, previewReduceMotion: reduceMotion)
                         .transition(.identity)
                 } else if model.analysisPreviewFrames.isEmpty {
                     ProgressView()
@@ -69,64 +89,6 @@ struct ResultsView: View {
 
     private var isShowingFrameAnalysis: Bool {
         model.isAnalyzing && model.progress.stage == .decoding && !model.analysisPreviewFrames.isEmpty
-    }
-
-    private var status: some View {
-        let count = model.isAnalyzing ? model.detectedScreens.count : model.visibleScreenshots.count
-        let countLabel = model.showsUniqueScreens && !model.isAnalyzing
-            ? "écran\(count == 1 ? "" : "s") unique\(count == 1 ? "" : "s")"
-            : "capture\(count == 1 ? "" : "s") trouvée\(count == 1 ? "" : "s")"
-        return VStack(spacing: 8) {
-            Text("\(count.formatted()) \(countLabel)")
-                .monospacedDigit()
-                .font(.system(size: 24, weight: .semibold))
-                .foregroundStyle(StillsetStyle.ink)
-                .multilineTextAlignment(.center)
-                .contentTransition(.identity)
-                .transaction { $0.animation = nil }
-                .accessibilityElement(children: .combine)
-
-            if let focused = model.focusedScreenshot,
-               let screen = model.screenClassifications[focused.id] {
-                Text(screen.name)
-                    .font(.headline)
-                    .foregroundStyle(StillsetStyle.muted)
-                    .lineLimit(2, reservesSpace: true)
-                    .frame(maxWidth: 500)
-                    .help("Nom d’écran proposé automatiquement")
-            }
-
-            if !model.isWorking {
-                HStack {
-                    Picker("Captures", selection: Binding(
-                        get: { model.showsUniqueScreens }, set: model.setUniqueScreens
-                    )) {
-                        Text("Uniques").tag(true)
-                        Text("Toutes").tag(false)
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .frame(width: 190)
-                    .help("Uniques conserve chaque état distinct ; Toutes affiche aussi les répétitions")
-                    .disabled(model.screenClassifications.isEmpty)
-                    Spacer()
-                    Button("Affiner avec l’IA", systemImage: "sparkles", action: model.refineScreens)
-                        .buttonStyle(.bordered)
-                        .buttonBorderShape(.capsule)
-                        .disabled(model.screenshots.isEmpty || model.refinementDetail != nil)
-                        .help("Analyse facultative des cas ambigus ; peut prendre plus longtemps")
-                    Button("Ouvrir une vidéo…", systemImage: "film", action: model.chooseVideo)
-                        .buttonStyle(.bordered)
-                        .buttonBorderShape(.capsule)
-                    if !model.selectedScreenshotIDs.isEmpty {
-                        Button("Exporter…", systemImage: "square.and.arrow.up", action: model.saveSelection)
-                            .buttonStyle(.bordered)
-                            .buttonBorderShape(.capsule)
-                    }
-                }
-            }
-        }
-        .frame(maxWidth: .infinity)
     }
 
     private var progressFooter: some View {
@@ -161,7 +123,7 @@ struct ResultsView: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(StillsetStyle.muted)
 
-                    StageProgressBar(fraction: model.progress.fraction)
+                    StageProgressBar(fraction: model.progress.fraction, previewReduceMotion: reduceMotion)
                 }
                 .frame(maxWidth: 420)
                 .frame(maxWidth: .infinity)
@@ -185,12 +147,10 @@ struct ResultsView: View {
                     }
                 }
                 .font(.caption)
-            } else {
-                Color.clear
             }
         }
+        .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity)
-        .frame(height: 58)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: model.isWorking)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: model.notice)
     }
@@ -204,48 +164,81 @@ struct ResultsView: View {
 
     private var timeline: some View {
         let thumbnailWidth = min(160, max(48, 112 * videoAspectRatio))
-        let occurrences = allTimelineOccurrences
+        let isGrouped = model.groupsTimelineByScreen && !model.isAnalyzing
+        let groups = model.isAnalyzing ? [] : model.timelineScreenGroups
+        let sourceOccurrences = allTimelineOccurrences
+        var groupRanks = Dictionary(uniqueKeysWithValues: groups.enumerated().map { ($0.element.id, $0.offset) })
+        for occurrence in sourceOccurrences {
+            let screenID = model.screenClassifications[occurrence.id]?.screenID
+            if groupRanks[screenID] == nil { groupRanks[screenID] = groupRanks.count }
+        }
+        let occurrences = isGrouped ? sourceOccurrences.enumerated().sorted {
+            let lhsRank = groupRanks[model.screenClassifications[$0.element.id]?.screenID, default: 0]
+            let rhsRank = groupRanks[model.screenClassifications[$1.element.id]?.screenID, default: 0]
+            return lhsRank == rhsRank ? $0.offset < $1.offset : lhsRank < rhsRank
+        }.map(\.element) : sourceOccurrences
         let visibleIDs = model.isAnalyzing ? occurrences.map(\.id) : model.visibleScreenshots.map(\.id)
         let visibleRanks = Dictionary(uniqueKeysWithValues: visibleIDs.enumerated().map { ($0.element, $0.offset) })
+        let groupEnds = isGrouped ? Set(groups.compactMap { $0.screenshots.last?.id }) : []
+        let presentation = TimelinePresentation(
+            grouped: isGrouped, unique: model.showsUniqueScreens, visibleIDs: visibleIDs,
+            headers: groups.map { .init(screenID: $0.id, name: $0.name, memberIDs: $0.screenshots.map(\.id)) },
+            navigationID: model.focusNavigationID
+        )
+        let animation: Animation? = reduceMotion ? nil : .smooth(duration: 0.36)
 
         return ScrollViewReader { proxy in
             ScrollView(.horizontal) {
-                HStack(spacing: 0) {
+                TimelineGroupLayout(isGrouped: isGrouped) {
                     ForEach(occurrences) { occurrence in
-                        let visibleRank = visibleRanks[occurrence.id]
-                        let isVisible = visibleRank != nil
-                        let index = visibleRank ?? 0
-                        let trailingGap: CGFloat = occurrence.id == visibleIDs.last ? 0 : 12
-                        let isSelected = model.selectedScreenshotIDs.contains(occurrence.id)
-                        let screen = model.screenClassifications[occurrence.id]
-                        TimelineOccurrenceCell(
-                            occurrence: occurrence,
-                            index: index,
-                            width: thumbnailWidth,
-                            isSelected: isSelected
-                        )
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("Capture \(index + 1), \(occurrence.state.representativeTimestamp.stillsetTimecode)")
-                        .accessibilityValue("En attente")
-                        .accessibilityHidden(!isVisible || occurrence.capture != nil)
-                        .overlay {
-                            if isVisible, let screenshot = occurrence.capture {
-                                TimelineDragView(
-                                    fileURLs: model.dragURLs(startingAt: screenshot.id),
-                                    accessibilityText: "Capture \(index + 1), \(screenshot.state.representativeTimestamp.stillsetTimecode)\(isSelected ? ", sélectionnée" : "")\(screen.map { ", écran \($0.screenID), \($0.name)" } ?? "")",
-                                    onClick: { modifiers in model.selectScreenshot(screenshot.id, modifiers: modifiers) },
-                                    onArrow: model.moveFocus(by:)
-                                )
+                        let isVisible = visibleRanks[occurrence.id] != nil
+                        timelineCell(occurrence, thumbnailWidth: thumbnailWidth,
+                                     visibleRanks: visibleRanks,
+                                     isLast: occurrence.id == visibleIDs.last || groupEnds.contains(occurrence.id))
+                            .layoutValue(key: TimelineGroupIndex.self,
+                                         value: isVisible ? (isGrouped ? groupRanks[model.screenClassifications[occurrence.id]?.screenID, default: 0] : 0) : -1)
+                            .opacity(isVisible ? 1 : 0)
+                            .allowsHitTesting(isVisible)
+                            .disabled(!isVisible)
+                            .accessibilityHidden(!isVisible)
+                            .id(occurrence.id)
+                    }
+                    ForEach(groups, id: \.id) { group in
+                        let selectedCount = group.screenshots.filter { model.selectedScreenshotIDs.contains($0.id) }.count
+                        Button {
+                            model.selectTimelineScreenGroup(group.id)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(verbatim: group.name)
+                                    .font(.caption.weight(.semibold))
+                                    .lineLimit(nil)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .multilineTextAlignment(.leading)
                             }
+                            .padding(6)
+                            .frame(maxWidth: 240, alignment: .leading)
+                            .background(StillsetStyle.accent.opacity(selectedCount == group.screenshots.count ? 0.14 : 0),
+                                        in: RoundedRectangle(cornerRadius: 6))
+                            .contentShape(Rectangle())
                         }
-                        .help(screen.map { "Écran \($0.screenID) · \($0.name) · \(occurrence.state.representativeTimestamp.stillsetTimecode)" } ?? occurrence.state.representativeTimestamp.stillsetTimecode)
-                        .compositingGroup()
-                        .opacity(isVisible ? 1 : 0)
-                        .geometryGroup()
-                        .frame(width: isVisible ? thumbnailWidth + 6 + trailingGap : 0, height: 136, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .allowsHitTesting(isVisible)
-                        .id(occurrence.id)
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("\(group.name), \(group.screenshots.count) captures visibles")
+                        .accessibilityValue("\(selectedCount) sur \(group.screenshots.count) sélectionnées")
+                        .accessibilityHint("Sélectionne les captures visibles de cet écran")
+                        .onKeyPress(.leftArrow) {
+                            model.moveFocus(by: -1)
+                            return .handled
+                        }
+                        .onKeyPress(.rightArrow) {
+                            model.moveFocus(by: 1)
+                            return .handled
+                        }
+                        .layoutValue(key: TimelineGroupIndex.self, value: groupRanks[group.id, default: 0])
+                        .layoutValue(key: TimelineGroupHeader.self, value: true)
+                        .opacity(isGrouped ? 1 : 0)
+                        .allowsHitTesting(isGrouped)
+                        .disabled(!isGrouped)
+                        .accessibilityHidden(!isGrouped)
                     }
                 }
                 .padding(.horizontal, 24)
@@ -257,8 +250,10 @@ struct ResultsView: View {
                 }
             }
             .scrollIndicators(.never)
-            .frame(height: 158)
-            .animation(reduceMotion ? nil : .smooth(duration: 0.36), value: visibleIDs)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(minHeight: 158)
+            .layoutPriority(1)
+            .animation(animation, value: presentation)
             .onChange(of: model.detectedScreens.count) {
                 if model.isAnalyzing, model.followsLatest, let last = model.detectedScreens.last,
                    visibleRanks[last.id] != nil {
@@ -275,15 +270,67 @@ struct ResultsView: View {
                     }
                 }
             }
-            .onChange(of: model.focusNavigationID) { _, focusedID in
-                if let focusedID,
-                   visibleRanks[focusedID] != nil {
-                    withAnimation(reduceMotion ? nil : .smooth(duration: 0.3)) {
-                        proxy.scrollTo(focusedID)
-                    }
+            .onChange(of: presentation) { old, new in
+                guard !model.isAnalyzing else { return }
+                let displayChanged = old.grouped != new.grouped || old.unique != new.unique
+                    || old.visibleIDs != new.visibleIDs
+                    || old.headers.map(\.screenID) != new.headers.map(\.screenID)
+                    || old.headers.map(\.memberIDs) != new.headers.map(\.memberIDs)
+                if displayChanged, let focusedID = model.focusedScreenshotID, visibleRanks[focusedID] != nil {
+                    withAnimation(animation) { proxy.scrollTo(focusedID, anchor: old.grouped != new.grouped ? .center : nil) }
+                } else if old.navigationID != new.navigationID,
+                          let navigationID = new.navigationID, visibleRanks[navigationID] != nil {
+                    withAnimation(animation) { proxy.scrollTo(navigationID) }
                 }
             }
         }
+    }
+
+    private func timelineCell(_ occurrence: TimelineOccurrence, thumbnailWidth: CGFloat,
+                              visibleRanks: [UUID: Int], isLast: Bool) -> some View {
+        let visibleRank = visibleRanks[occurrence.id]
+        let isVisible = visibleRank != nil
+        let index = visibleRank ?? 0
+        let trailingGap: CGFloat = isLast ? 0 : 12
+        let isSelected = model.selectedScreenshotIDs.contains(occurrence.id)
+        let screen = model.screenClassifications[occurrence.id]
+        return TimelineOccurrenceCell(
+            occurrence: occurrence,
+            index: index,
+            width: thumbnailWidth,
+            isSelected: isSelected,
+            previewReduceMotion: reduceMotion
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Capture \(index + 1), \(occurrence.state.representativeTimestamp.stillsetTimecode)")
+        .accessibilityValue("En attente")
+        .accessibilityHidden(!isVisible || occurrence.capture != nil)
+        .overlay {
+            if let screenshot = occurrence.capture {
+                TimelineDragView(
+                    fileURLs: isVisible ? model.dragURLs(startingAt: screenshot.id) : [],
+                    accessibilityText: "Capture \(index + 1), \(screenshot.state.representativeTimestamp.stillsetTimecode)\(isSelected ? ", sélectionnée" : "")\(screen.map { ", écran \($0.screenID), \($0.name)" } ?? "")",
+                    onClick: { modifiers in
+                        if isVisible { model.selectScreenshot(screenshot.id, modifiers: modifiers) }
+                    },
+                    onArrow: { offset in
+                        if isVisible { model.moveFocus(by: offset) }
+                    }
+                )
+                .opacity(isVisible ? 1 : 0)
+                .allowsHitTesting(isVisible)
+                .disabled(!isVisible)
+                .accessibilityHidden(!isVisible)
+            }
+        }
+        .help(screen.map { "Écran \($0.screenID) · \($0.name) · \(occurrence.state.representativeTimestamp.stillsetTimecode)" } ?? occurrence.state.representativeTimestamp.stillsetTimecode)
+        .compositingGroup()
+        .opacity(isVisible ? 1 : 0)
+        .geometryGroup()
+        .frame(width: isVisible ? thumbnailWidth + 6 + trailingGap : 0, height: 136, alignment: .leading)
+        .contentShape(Rectangle())
+        .allowsHitTesting(isVisible)
+        .disabled(!isVisible)
     }
 
     private var videoAspectRatio: CGFloat {
@@ -295,11 +342,128 @@ struct ResultsView: View {
     }
 }
 
+private struct ResultsTimelineHeader: View {
+    var model: AppModel
+    let reduceMotion: Bool
+
+    var body: some View {
+        count
+            .frame(maxWidth: .infinity)
+            .frame(height: 40)
+    }
+
+    private var count: some View {
+        let count = model.isAnalyzing ? model.detectedScreens.count : model.visibleScreenshots.count
+        let countLabel = model.showsUniqueScreens && !model.isAnalyzing
+            ? "capture\(count == 1 ? "" : "s") unique\(count == 1 ? "" : "s")"
+            : "capture\(count == 1 ? "" : "s") trouvée\(count == 1 ? "" : "s")"
+        return Text("\(count.formatted()) \(countLabel)")
+            .monospacedDigit()
+            .font(.system(size: 28, weight: .semibold))
+            .foregroundStyle(StillsetStyle.ink)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .contentTransition(reduceMotion ? .identity : .numericText(value: Double(count)))
+            .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: count)
+    }
+}
+
+private struct TimelineGroupIndex: LayoutValueKey {
+    static let defaultValue = -1
+}
+
+private struct TimelineGroupHeader: LayoutValueKey {
+    static let defaultValue = false
+}
+
+private struct TimelineGroupLayout: Layout {
+    let isGrouped: Bool
+
+    private struct Arrangement {
+        var size: CGSize = .zero
+        var positions: [Int: CGPoint] = [:]
+        var proposals: [Int: ProposedViewSize] = [:]
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrangement(subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = arrangement(subviews)
+        for index in subviews.indices {
+            let position = result.positions[index] ?? .zero
+            subviews[index].place(at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y),
+                                  anchor: .topLeading, proposal: result.proposals[index] ?? .zero)
+        }
+    }
+
+    private func arrangement(_ subviews: Subviews) -> Arrangement {
+        let headers = subviews.indices.filter { subviews[$0][TimelineGroupHeader.self] }
+        let headerSizes = Dictionary(uniqueKeysWithValues: headers.map { index in
+            let idealWidth = subviews[index].sizeThatFits(.unspecified).width
+            let proposal = ProposedViewSize(width: min(240, idealWidth), height: nil)
+            return (index, subviews[index].sizeThatFits(proposal))
+        })
+        let headerHeight = headerSizes.values.map(\.height).max() ?? 0
+        let groups = Dictionary(grouping: subviews.indices.filter {
+            subviews[$0][TimelineGroupIndex.self] >= 0
+                && (isGrouped || !subviews[$0][TimelineGroupHeader.self])
+        }) {
+            subviews[$0][TimelineGroupIndex.self]
+        }
+        var result = Arrangement()
+        for (index, size) in headerSizes {
+            result.proposals[index] = ProposedViewSize(size)
+        }
+        var captureHeight: CGFloat = 0
+        let lastGroupIndex = groups.keys.max()
+        let captureY = headerHeight > 0 ? headerHeight + 6 : 0
+        for groupIndex in groups.keys.sorted() {
+            let indices = groups[groupIndex, default: []]
+            let cells = indices.filter { !subviews[$0][TimelineGroupHeader.self] }
+            let header = indices.first { subviews[$0][TimelineGroupHeader.self] }
+            var groupWidth: CGFloat = 0
+            for index in cells {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                result.positions[index] = CGPoint(x: result.size.width + groupWidth, y: captureY)
+                result.proposals[index] = ProposedViewSize(size)
+                groupWidth += size.width
+                captureHeight = max(captureHeight, size.height)
+            }
+            if let header, let size = headerSizes[header] {
+                result.positions[header] = CGPoint(x: result.size.width, y: 0)
+                groupWidth = max(groupWidth, size.width)
+            }
+            result.size.width += groupWidth + (groupIndex == lastGroupIndex ? 0 : 20)
+        }
+        result.size.height = captureY + captureHeight
+        return result
+    }
+}
+
+private struct TimelinePresentation: Equatable {
+    let grouped: Bool
+    let unique: Bool
+    let visibleIDs: [UUID]
+    let headers: [Header]
+    let navigationID: UUID?
+
+    struct Header: Equatable {
+        let screenID: Int?
+        let name: String
+        let memberIDs: [UUID]
+    }
+}
+
 private struct PhotoStackPreview: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
 
     var model: AppModel
     let imageSize: CGSize
+    var previewReduceMotion = false
+
+    private var reduceMotion: Bool { systemReduceMotion || previewReduceMotion }
 
     var body: some View {
         let width = imageSize.width
@@ -569,9 +733,33 @@ private struct StageProgressBar: View {
     ResultsRecognitionPreview(completed: true, focusesRepeat: true)
 }
 
+#Preview("Résultats · par écran, fenêtre étroite") {
+    ResultsRecognitionPreview(completed: true, grouped: true, previewWidth: 820, previewHeight: 620,
+                              longSingleCapture: true)
+}
+
+#Preview("Résultats · par écran, mouvement réduit") {
+    ResultsRecognitionPreview(completed: true, grouped: true, previewWidth: 820, previewHeight: 620,
+                              longSingleCapture: true, previewReduceMotion: true)
+}
+
+#Preview("Résultats · barre d’outils native", arguments: [CGFloat(820), CGFloat(540), CGFloat(420)]) { width in
+    ResultsRecognitionPreview(completed: true, grouped: true, previewWidth: width, previewHeight: 620,
+                              longSingleCapture: true, usesRootView: true)
+}
+
+#Preview("Résultats · organisation stable, noms longs", arguments: [false, true]) { grouped in
+    ResultsRecognitionPreview(completed: true, grouped: grouped, previewWidth: 820, previewHeight: 620,
+                              longSingleCapture: true, usesRootView: true)
+}
+
 private struct ResultsRecognitionPreview: View {
     @State private var model: AppModel
     private let focusesRepeat: Bool
+    private let previewWidth: CGFloat
+    private let previewHeight: CGFloat
+    private let previewReduceMotion: Bool
+    private let usesRootView: Bool
 
     private static let screens = (0..<24).map { index in
         let timestamp = Double(index) * 3
@@ -589,40 +777,60 @@ private struct ResultsRecognitionPreview: View {
         return (screen.id, ScreenClassification(screenID: stateID, name: names[stateID - 1], stateID: stateID))
     })
 
-    init(completed: Bool, focusesRepeat: Bool = true) {
+    init(completed: Bool, focusesRepeat: Bool = true, grouped: Bool = false, previewWidth: CGFloat = 1000,
+         previewHeight: CGFloat = 760, longSingleCapture: Bool = false, previewReduceMotion: Bool = false,
+         usesRootView: Bool = false) {
         self.focusesRepeat = focusesRepeat
-        let model = AppModel()
-        model.detectedScreens = Self.screens
-        model.screenshots = Self.captures
+        self.previewWidth = previewWidth
+        self.previewHeight = previewHeight
+        self.previewReduceMotion = previewReduceMotion
+        self.usesRootView = usesRootView
+        let suite = "Stillset-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = AppModel(preferences: AppPreferences(defaults: defaults))
+        model.videoURL = URL(fileURLWithPath: "/tmp/iphone-workflow.mp4")
+        model.screenshots = longSingleCapture ? [0, 2, 4, 6, 7].map { Self.captures[$0] } : Self.captures
+        model.detectedScreens = model.screenshots.map(\.state)
         if completed {
             model.screenClassifications = Self.classifications
             model.setUniqueScreens(false)
+            model.setTimelineGrouping(grouped)
         }
-        model.selectScreenshot(Self.captures[focusesRepeat ? Self.captures.count - 1 : 4].id, modifiers: [])
+        model.selectScreenshot(Self.captures[longSingleCapture ? 4 : (focusesRepeat ? Self.captures.count - 1 : 4)].id,
+                               modifiers: [])
         model.setPreviewAnalysisRunning(!completed)
         _model = State(initialValue: model)
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Button(model.isAnalyzing ? "Terminer l’organisation" : "Recommencer l’organisation") {
-                    if model.isAnalyzing {
-                        model.screenClassifications = Self.classifications
-                        model.setUniqueScreens(model.showsUniqueScreens)
-                        model.setPreviewAnalysisRunning(false)
-                    } else {
-                        model.screenClassifications = [:]
-                        model.selectScreenshot(Self.captures[focusesRepeat ? Self.captures.count - 1 : 4].id, modifiers: [])
-                        model.setPreviewAnalysisRunning(true)
+            if !usesRootView {
+                HStack {
+                    Button(model.isAnalyzing ? "Terminer l’organisation" : "Recommencer l’organisation") {
+                        if model.isAnalyzing {
+                            model.screenClassifications = Self.classifications
+                            model.setUniqueScreens(model.showsUniqueScreens)
+                            model.setPreviewAnalysisRunning(false)
+                        } else {
+                            model.screenClassifications = [:]
+                            if let capture = focusesRepeat ? model.screenshots.last : model.screenshots.first {
+                                model.selectScreenshot(capture.id, modifiers: [])
+                            }
+                            model.setPreviewAnalysisRunning(true)
+                        }
                     }
+                    Spacer()
                 }
-                Spacer()
+                .padding(16)
             }
-            .padding(16)
-            ResultsView(model: model)
+            if usesRootView {
+                StillsetRootView(model: model)
+            } else {
+                ResultsView(model: model, previewReduceMotion: previewReduceMotion)
+            }
         }
-        .frame(width: 1000, height: 760)
+        .frame(width: previewWidth, height: previewHeight)
         .background(StillsetStyle.surface)
     }
 }

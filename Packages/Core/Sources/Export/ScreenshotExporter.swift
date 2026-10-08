@@ -1,4 +1,5 @@
 import AVFoundation
+import Darwin
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -10,9 +11,7 @@ public enum ScreenshotExporter {
         let width = max(3, String(files.count).count)
         return try files.enumerated().map { index, file in
             try Task.checkCancellation()
-            let title = screenNames[index].folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))
-            let slug = title.split { !$0.isLetter && !$0.isNumber }.joined(separator: "-")
-            let name = String(format: "%0*d", width, index + 1) + "_" + (slug.isEmpty ? "ecran" : String(slug.prefix(64)))
+            let name = numberedName(index: index, width: width, screenName: screenNames[index])
             if file.lastPathComponent == name + ".png", FileManager.default.fileExists(atPath: file.path) { return file }
             let destination = nonconflictingURL(folder: file.deletingLastPathComponent(), name: name)
             do {
@@ -22,6 +21,57 @@ public enum ScreenshotExporter {
             }
             return destination
         }
+    }
+
+    @discardableResult
+    public static func copy(
+        plan: ScreenshotExportPlan,
+        to folderURL: URL,
+        onProgress: @Sendable (Double, String) -> Void = { _, _ in }
+    ) throws -> [URL] {
+        let count = plan.fileCount
+        var copied: [URL] = []
+        copied.reserveCapacity(count)
+
+        func copySource(_ source: URL, to folder: URL, name: String) throws {
+            var suffix = 1
+            while true {
+                try Task.checkCancellation()
+                let component = suffix == 1 ? name : "\(name)-\(suffix)"
+                let destination = folder.appendingPathComponent("\(component).png")
+                do {
+                    try FileManager.default.copyItem(at: source, to: destination)
+                    copied.append(destination)
+                    onProgress(Double(copied.count) / Double(count), "Screenshot \(copied.count) of \(count)")
+                    return
+                } catch let error as NSError where error.domain == NSCocoaErrorDomain && error.code == NSFileWriteFileExistsError {
+                    suffix += 1
+                }
+            }
+        }
+
+        switch plan {
+        case .singleFolder(let entries):
+            let width = max(3, String(count).count)
+            for (index, entry) in entries.enumerated() {
+                try copySource(entry.sourceURL, to: folderURL,
+                               name: numberedName(index: index, width: width, screenName: entry.screenName))
+            }
+        case .screenFolders(let groups):
+            let groups = groups.filter { !$0.sourceURLs.isEmpty }
+            let groupWidth = max(3, String(groups.count).count)
+            for (index, group) in groups.enumerated() {
+                let folder = try createExportFolder(in: folderURL,
+                    name: numberedName(index: index, width: groupWidth, screenName: group.screenName))
+                let fileWidth = max(3, String(group.sourceURLs.count).count)
+                for (fileIndex, source) in group.sourceURLs.enumerated() {
+                    try copySource(source, to: folder,
+                                   name: numberedName(index: fileIndex, width: fileWidth, screenName: group.screenName))
+                }
+            }
+        }
+        try Task.checkCancellation()
+        return copied
     }
 
     @discardableResult
@@ -125,6 +175,27 @@ public enum ScreenshotExporter {
         let seconds = (wholeMilliseconds / 1000) % 60
         let milliseconds = wholeMilliseconds % 1000
         return String(format: "%02d-%02d.%03d", minutes, seconds, milliseconds)
+    }
+
+    private static func numberedName(index: Int, width: Int, screenName: String) -> String {
+        let title = screenName.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+        let slug = title.split { !$0.isLetter && !$0.isNumber }.joined(separator: "-")
+        return String(format: "%0*d", width, index + 1) + "_" + (slug.isEmpty ? "ecran" : String(slug.prefix(64)))
+    }
+
+    private static func createExportFolder(in parent: URL, name: String) throws -> URL {
+        var suffix = 1
+        while true {
+            try Task.checkCancellation()
+            let component = suffix == 1 ? name : "\(name)-\(suffix)"
+            let folder = parent.appendingPathComponent(component, isDirectory: true)
+            if folder.path.withCString({ mkdir($0, 0o777) }) == 0 { return folder }
+            let code = errno
+            guard code == EEXIST else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(code), userInfo: [NSFilePathErrorKey: folder.path])
+            }
+            suffix += 1
+        }
     }
 
     private static func nonconflictingURL(folder: URL, name: String) -> URL {

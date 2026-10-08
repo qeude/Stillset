@@ -23,9 +23,11 @@ Both use `dist/Stillset.app`. Local builds use ad-hoc signing and require no dev
 ## Use
 
 1. Drop a recording into the window or choose **Ouvrir…**. Analysis starts immediately.
-2. Review the full-resolution captures in the timeline. Switch between **Uniques** and **Toutes**.
+2. Review the full-resolution captures in the timeline. Switch between **Uniques** and **Toutes**. Choose **Par écran** to gather captures under each detected screen name, or **Chronologie** to follow the recording. Groups follow first appearance; captures within each group stay chronological.
 3. Click to select, Command-click to add captures, Shift-click to select a range, or press **⌘A** to select all visible captures. Arrow keys move through the timeline.
-4. Drag the selection, press **⌘C** to copy its PNG files, or **⌘S** to save them to a folder. Existing destination files are never overwritten.
+4. Drag the selection or press **⌘C** to copy its staged PNG files in recording order. Use **Exporter…** or **⌘S** to save selected visible captures in the current timeline order. SAVE assigns consecutive numbers and safe screen names, such as `001_compte.png`. **Chronologie** always saves into one folder. **Par écran** also uses one folder by default, with groups in first-appearance order and captures chronological within each group. Existing destination files are never overwritten.
+
+Open **Stillset → Réglages…** (**⌘,**) to choose **Uniques / Toutes** and **Chronologie / Par écran** defaults for the next recording. Settings do not change the current recording or selection; timeline buttons apply only to that recording. For the next **Par écran** export, Settings also offers **Un dossier par écran**, for example `001_compte/001_compte.png`. Distinct screens keep separate folders even when their names match, and unclassified captures use **À identifier**. Export freezes the selected captures, names and layout before opening the destination chooser; background refinement can continue. Saved PNGs are independent copies of the original-resolution bytes.
 
 Automatic analysis finishes without Foundation Models requests. **Affiner avec l’IA** optionally refines ambiguous names and groups while navigation and export remain available. **Arrêter l’affinage** keeps the current results.
 
