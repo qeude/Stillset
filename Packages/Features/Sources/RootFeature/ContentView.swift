@@ -22,6 +22,40 @@ public struct StillsetRootView: View {
             StillsetStyle.background
                 .ignoresSafeArea()
         }
+        .navigationTitle(model.videoURL?.lastPathComponent ?? "Stillset")
+        .toolbar {
+            if !model.screenshots.isEmpty || model.isAnalyzing {
+                ToolbarItem(placement: .automatic) {
+                    Button("Nouvelle analyse…", systemImage: "plus", action: model.chooseVideo)
+                        .labelStyle(.iconOnly)
+                        .accessibilityLabel("Nouvelle analyse…")
+                        .help("Nouvelle analyse…")
+                        .disabled(model.isWorking)
+                }
+                .visibilityPriority(.low)
+                ToolbarSpacer(.flexible)
+                if !model.isWorking {
+                    ToolbarItem(placement: .automatic) {
+                        filtersMenu
+                    }
+                }
+                ToolbarItem(placement: .automatic) {
+                    Button("Affiner avec l’IA…", systemImage: "sparkles", action: model.refineScreens)
+                        .labelStyle(.iconOnly)
+                        .accessibilityLabel("Affiner avec l’IA…")
+                        .disabled(model.isWorking || model.screenshots.isEmpty || model.refinementDetail != nil)
+                        .help("Affiner avec l’IA")
+                }
+                .visibilityPriority(.high)
+                ToolbarItem(placement: .automatic) {
+                    Button("Exporter…", systemImage: "square.and.arrow.up", action: model.saveSelection)
+                        .labelStyle(.iconOnly)
+                        .accessibilityLabel("Exporter les captures sélectionnées…")
+                        .help("Exporter la sélection")
+                        .disabled(!model.canSaveSelection)
+                }
+            }
+        }
         .overlay {
             if isDropTargeted {
                 RoundedRectangle(cornerRadius: 18)
@@ -45,5 +79,34 @@ public struct StillsetRootView: View {
         } message: {
             Text(model.errorMessage ?? "")
         }
+    }
+
+    private var filtersMenu: some View {
+        let captures = model.showsUniqueScreens ? "Captures uniques" : "Toutes les captures"
+        let organisation = model.groupsTimelineByScreen ? "Par écran" : "Chronologie"
+        return Menu {
+            Picker("Captures", selection: Binding(
+                get: { model.showsUniqueScreens }, set: model.setUniqueScreens
+            )) {
+                Text("Uniques").tag(true)
+                Text("Toutes").tag(false)
+            }
+            .pickerStyle(.inline)
+            Divider()
+            Picker("Organisation", selection: Binding(
+                get: { model.groupsTimelineByScreen }, set: model.setTimelineGrouping
+            )) {
+                Text("Chronologie").tag(false)
+                Text("Par écran").tag(true)
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Label("Filtres", systemImage: "line.3.horizontal.decrease")
+        }
+        .labelStyle(.iconOnly)
+        .help("Filtres")
+        .accessibilityLabel("Filtres")
+        .accessibilityValue("\(captures), \(organisation)")
+        .disabled(model.screenClassifications.isEmpty)
     }
 }
