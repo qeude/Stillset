@@ -11,7 +11,10 @@ struct OperationOwnershipTests {
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = AppPreferences(defaults: defaults)
-        let model = AppModel(preferences: preferences)
+        let cacheFolder = FileManager.default.temporaryDirectory.appendingPathComponent("Stillset-cache-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: cacheFolder) }
+        let cache = RecentAnalysisCache(directory: cacheFolder)
+        let model = AppModel(preferences: preferences, cache: cache)
         let organization = OperationGate()
         let copying = OperationGate()
         model.beforeOrganization = { try await organization.block() }
@@ -66,7 +69,10 @@ struct OperationOwnershipTests {
         let suite = "Stillset-Operations-\(UUID())"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let model = AppModel(preferences: AppPreferences(defaults: defaults))
+        let cacheFolder = FileManager.default.temporaryDirectory.appendingPathComponent("Stillset-cache-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: cacheFolder) }
+        let cache = RecentAnalysisCache(directory: cacheFolder)
+        let model = AppModel(preferences: AppPreferences(defaults: defaults), cache: cache)
         let organization = OperationGate()
         let copying = OperationGate()
         model.beforeOrganization = { try await organization.block() }
@@ -109,7 +115,10 @@ struct OperationOwnershipTests {
         let suite = "Stillset-Operations-\(UUID())"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let model = AppModel(preferences: AppPreferences(defaults: defaults))
+        let cacheFolder = FileManager.default.temporaryDirectory.appendingPathComponent("Stillset-cache-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: cacheFolder) }
+        let cache = RecentAnalysisCache(directory: cacheFolder)
+        let model = AppModel(preferences: AppPreferences(defaults: defaults), cache: cache)
         model.importVideo(recording)
         await model.waitForAnalysis()
         #expect(model.progress.stage == .complete)
