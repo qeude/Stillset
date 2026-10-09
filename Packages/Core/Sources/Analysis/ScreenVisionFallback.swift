@@ -1,6 +1,64 @@
 import Foundation
 import Synchronization
-import Vision
+// Vision's legacy request is not Sendable, but its cancel call must overlap a blocked perform.
+@preconcurrency import Vision
+
+final class RequestCancellation: Sendable {
+    private struct State: Sendable {
+        var isCancelled = false
+        var isFinished = false
+        var cancel: (@Sendable () -> Void)?
+    }
+
+    private let state = Mutex(State())
+    private let enqueue: @Sendable (@escaping @Sendable () -> Void) -> Void
+
+    init(enqueue: @escaping @Sendable (@escaping @Sendable () -> Void) -> Void = {
+        DispatchQueue.global(qos: .utility).async(execute: $0)
+    }) {
+        self.enqueue = enqueue
+    }
+
+    var isCancelled: Bool { state.withLock { $0.isCancelled } }
+    var isFinished: Bool { state.withLock { $0.isFinished } }
+
+    func install(cancel: @escaping @Sendable () -> Void) -> Bool {
+        let result = state.withLock { state -> (installed: Bool, cancelImmediately: Bool) in
+            guard !state.isCancelled, !state.isFinished else { return (false, state.isCancelled) }
+            state.cancel = cancel
+            return (true, false)
+        }
+        if result.cancelImmediately { cancel() }
+        return result.installed
+    }
+
+    func cancel() {
+        let shouldDispatch = state.withLock { state -> Bool in
+            guard !state.isCancelled else { return false }
+            state.isCancelled = true
+            return state.cancel != nil
+        }
+        guard shouldDispatch else { return }
+        enqueue { self.invokeCancellationIfNeeded() }
+    }
+
+    func finish() {
+        state.withLock {
+            $0.isFinished = true
+            $0.cancel = nil
+        }
+    }
+
+    private func invokeCancellationIfNeeded() {
+        let handler = state.withLock { state -> (@Sendable () -> Void)? in
+            guard state.isCancelled, !state.isFinished else { return nil }
+            let handler = state.cancel
+            state.cancel = nil
+            return handler
+        }
+        handler?()
+    }
+}
 
 /// Local foreground evidence resolves clear cases before invoking the language model.
 enum ScreenVisionFallback {
@@ -151,23 +209,21 @@ enum ScreenVisionFallback {
 
     static func recognize(_ image: CGImage) async throws -> Recognition {
         try Task.checkCancellation()
-        let requestState = Mutex<(cancelled: Bool, request: VNRecognizeTextRequest?)>((false, nil))
+        let cancellation = RequestCancellation()
         let recognition: Recognition = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 // Vision waits on internal queues; keep synchronous work off Swift's cooperative executor.
-                DispatchQueue.global(qos: .userInitiated).async {
+                DispatchQueue.global(qos: .utility).async {
                     do {
+                        guard !cancellation.isCancelled else { throw CancellationError() }
                         let request = VNRecognizeTextRequest()
-                        let cancelled = requestState.withLock { state in
-                            if state.cancelled { return true }
-                            state.request = request
-                            return false
-                        }
-                        guard !cancelled else { throw CancellationError() }
-                        defer { requestState.withLock { $0.request = nil } }
+                        guard cancellation.install(cancel: {
+                            request.cancel()
+                        }) else { throw CancellationError() }
                         request.recognitionLevel = .accurate
                         request.recognitionLanguages = ["fr-FR", "en-US"]
                         request.usesLanguageCorrection = false
+                        guard !cancellation.isCancelled else { throw CancellationError() }
                         try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
                         let lines = (request.results ?? []).filter {
                             $0.boundingBox.maxY <= 0.94 && ($0.topCandidates(1).first?.confidence ?? 0) >= 0.3
@@ -182,6 +238,8 @@ enum ScreenVisionFallback {
                                 && ($0.topCandidates(1).first?.string.count ?? 0) <= 80
                         }
                         let page = titles.first { $0.boundingBox.midY >= 0.65 }
+                        // ponytail: centered, bright header over a dimmed page identifies common bottom sheets.
+                        // Other overlay layouts need a broader labelled corpus before extending this heuristic.
                         let pageBrightness = page.map { brightness(image, $0.boundingBox) } ?? 255
                         let sheet = titles.first {
                             (0.2...0.75).contains($0.boundingBox.midY)
@@ -190,6 +248,8 @@ enum ScreenVisionFallback {
                         }
                         let title = sheet ?? page ?? titles.first
                         let titleText = title?.topCandidates(1).first?.string
+                        // ponytail: only a bright sheet with multiple numeric options skips the model.
+                        // Forms and ambiguous headings keep image analysis; expand with labelled fixtures.
                         let recognizedLines = lines.compactMap { line in
                             line.topCandidates(1).first.map {
                                 TextLine(text: $0.string, box: line.boundingBox, confidence: $0.confidence,
@@ -202,24 +262,24 @@ enum ScreenVisionFallback {
                                 confidence: header.topCandidates(1).first?.confidence ?? 0,
                                 body: recognizedLines.filter { $0.box.midY < header.boundingBox.minY })
                         }
-                        continuation.resume(returning: Recognition(
+                        let recognition = Recognition(
                             title: titleText.map { ScreenClassification(screenID: 0, name: $0).name },
                             pickerName: picker,
                             lines: recognizedLines.filter { $0.box.midY <= (sheet.map { $0.boundingBox.maxY + 0.04 } ?? 0.94) },
                             titleConfidence: title?.topCandidates(1).first?.confidence ?? 0,
                             pixels: pixels(image, box: CGRect(x: 0, y: 0, width: 1,
                                 height: sheet.map { $0.boundingBox.maxY + 0.04 } ?? 0.94), width: 128, height: 256)
-                        ))
+                        )
+                        cancellation.finish()
+                        continuation.resume(returning: recognition)
                     } catch {
-                        continuation.resume(throwing: requestState.withLock { $0.cancelled } ? CancellationError() : error)
+                        cancellation.finish()
+                        continuation.resume(throwing: error)
                     }
                 }
             }
         } onCancel: {
-            requestState.withLock { state in
-                state.cancelled = true
-                state.request?.cancel()
-            }
+            cancellation.cancel()
         }
         try Task.checkCancellation()
         return recognition

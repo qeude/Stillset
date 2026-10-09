@@ -4,6 +4,7 @@ public struct Frame: Sendable {
     public let timestamp: TimeInterval
     public let width: Int
     public let height: Int
+    public let sourceAspectRatio: Double
     public let luma: Data
     public let previewWidth: Int?
     public let previewHeight: Int?
@@ -14,6 +15,7 @@ public struct Frame: Sendable {
         width: Int,
         height: Int,
         luma: Data,
+        sourceAspectRatio: Double? = nil,
         previewWidth: Int? = nil,
         previewHeight: Int? = nil,
         previewRGBA: Data? = nil
@@ -21,6 +23,7 @@ public struct Frame: Sendable {
         self.timestamp = timestamp
         self.width = width
         self.height = height
+        self.sourceAspectRatio = sourceAspectRatio ?? Double(width) / Double(max(1, height))
         self.luma = luma
         self.previewWidth = previewWidth
         self.previewHeight = previewHeight

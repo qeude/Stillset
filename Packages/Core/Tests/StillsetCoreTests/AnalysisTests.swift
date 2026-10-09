@@ -202,7 +202,7 @@ struct AnalysisTests {
         defer { try? FileManager.default.removeItem(at: copyFolder) }
         try FileManager.default.createDirectory(at: copyFolder, withIntermediateDirectories: true)
         try FileManager.default.copyItem(at: outputs[0], to: copyFolder.appendingPathComponent(outputs[0].lastPathComponent))
-        let copied = try ScreenshotExporter.copy(files: outputs, to: copyFolder)
+        let copied = try await ScreenshotExporter.copy(files: outputs, to: copyFolder)
         #expect(copied.count == outputs.count)
         #expect(copied[0].lastPathComponent != outputs[0].lastPathComponent)
         #expect(copied.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })

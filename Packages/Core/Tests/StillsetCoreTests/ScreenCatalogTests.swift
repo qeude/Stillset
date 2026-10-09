@@ -5,11 +5,106 @@ import Foundation
 import FoundationModels
 import ImageIO
 @testable import StillsetCore
+import Synchronization
 import Testing
 import Synchronization
 import UniformTypeIdentifiers
 
 struct ScreenCatalogTests {
+    @Test func successfulRecognitionIsReusedAcrossChangedCatalogs() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let first = try screenshot(title: "Page A", offset: 0, folder: folder)
+        let second = try screenshot(title: "Page B", offset: 0, folder: folder)
+        let copiedFirst = folder.appendingPathComponent("copied-page-a.png")
+        try Data(contentsOf: first).write(to: copiedFirst)
+        let counter = RecognitionCounter()
+        let cache = ScreenRecognitionCache()
+        let makeRecognition: @Sendable (URL) async throws -> ScreenVisionFallback.Recognition = { url in
+            await counter.increment()
+            let title = url == second ? "Page B" : "Page A"
+            return ScreenVisionFallback.Recognition(title: title, pickerName: nil,
+                lines: [ScreenVisionFallback.TextLine(text: title, box: CGRect(x: 0.2, y: 0.8, width: 0.6, height: 0.04), confidence: 1)],
+                titleConfidence: 1)
+        }
+        let videoAnalyzer = ScreenCatalogAnalyzer(recognitionOperation: makeRecognition, recognitionCache: cache)
+        let sessionAnalyzer = ScreenCatalogAnalyzer(recognitionOperation: makeRecognition, recognitionCache: cache)
+
+        _ = try await videoAnalyzer.analyze(fileURLs: [first], useFoundationModels: false)
+        let changed = try await sessionAnalyzer.analyze(fileURLs: [copiedFirst, second], useFoundationModels: false)
+
+        #expect(await counter.value == 2)
+        #expect(changed.classifications.map(\.name) == ["Page A", "Page B"])
+        #expect(changed.classifications[0].stateID != changed.classifications[1].stateID)
+    }
+
+    @Test(.timeLimit(.minutes(2))) func largeCatalogKeepsCachedSuffixAvailableWhileFillingUncachedPrefix() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let template = try screenshot(title: "Shared page", offset: 0, folder: folder)
+        let templateData = try Data(contentsOf: template)
+        let files = try (0..<256).map { index -> URL in
+            let destination = folder.appendingPathComponent(String(format: "screen-%03d.png", index))
+            var bytes = templateData
+            bytes.append(contentsOf: [0x53, UInt8((index >> 8) & 0xff), UInt8(index & 0xff)])
+            try bytes.write(to: destination)
+            return destination
+        }
+        let counter = RecognitionCounter()
+        let cache = ScreenRecognitionCache()
+        let recognize: @Sendable (URL) async throws -> ScreenVisionFallback.Recognition = { _ in
+            await counter.increment()
+            let title = "Shared page"
+            let rowPixels = [UInt8](repeating: 0, count: 128 * 24 * 4)
+            return ScreenVisionFallback.Recognition(title: title, pickerName: nil,
+                lines: [
+                    ScreenVisionFallback.TextLine(text: title, box: CGRect(x: 0.2, y: 0.8, width: 0.6, height: 0.04), confidence: 1, rowPixels: rowPixels),
+                    ScreenVisionFallback.TextLine(text: "100", box: CGRect(x: 0.1, y: 0.65, width: 0.25, height: 0.03), confidence: 1, rowPixels: rowPixels),
+                    ScreenVisionFallback.TextLine(text: "200", box: CGRect(x: 0.1, y: 0.5, width: 0.25, height: 0.03), confidence: 1, rowPixels: rowPixels),
+                    ScreenVisionFallback.TextLine(text: "300", box: CGRect(x: 0.1, y: 0.35, width: 0.25, height: 0.03), confidence: 1, rowPixels: rowPixels)
+                ], titleConfidence: 1)
+        }
+
+        _ = try await ScreenCatalogAnalyzer(recognitionOperation: recognize, recognitionCache: cache)
+            .analyze(fileURLs: Array(files.suffix(128)), useFoundationModels: false)
+        let result = try await ScreenCatalogAnalyzer(recognitionOperation: recognize, recognitionCache: cache)
+            .analyze(fileURLs: files, useFoundationModels: false)
+
+        let calls = await counter.value
+        #expect(calls == 256)
+        #expect(result.classifications.count == files.count)
+        #expect(result.classifications.allSatisfy { $0.name == "Shared page" })
+        #expect(Set(result.classifications.map(\.stateID)).count == 1)
+    }
+
+    @Test func requestCancellationHandlesBothRegistrationOrdersExactlyOnce() {
+        let enqueueImmediately: @Sendable (@escaping @Sendable () -> Void) -> Void = { $0() }
+        let cancelBeforeInstall = RequestCancellation(enqueue: enqueueImmediately)
+        let firstCancelCount = Mutex(0)
+        cancelBeforeInstall.cancel()
+        let shouldStart = cancelBeforeInstall.install { firstCancelCount.withLock { $0 += 1 } }
+        #expect(!shouldStart)
+        #expect(firstCancelCount.withLock { $0 } == 1)
+        cancelBeforeInstall.cancel()
+        #expect(firstCancelCount.withLock { $0 } == 1)
+
+        let installBeforeCancel = RequestCancellation(enqueue: enqueueImmediately)
+        let secondCancelCount = Mutex(0)
+        #expect(installBeforeCancel.install { secondCancelCount.withLock { $0 += 1 } })
+        installBeforeCancel.cancel()
+        installBeforeCancel.cancel()
+        #expect(secondCancelCount.withLock { $0 } == 1)
+
+        let completedRequest = RequestCancellation(enqueue: enqueueImmediately)
+        let completedCancelCount = Mutex(0)
+        #expect(completedRequest.install { completedCancelCount.withLock { $0 += 1 } })
+        completedRequest.finish()
+        completedRequest.cancel()
+        #expect(completedCancelCount.withLock { $0 } == 0)
+    }
+
     @Test(.enabled(if: ProcessInfo.processInfo.environment["STILLSET_TEST_LOCAL_MODEL"] == "1"))
     func hybridNamesWholeScreens() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -46,7 +141,7 @@ struct ScreenCatalogTests {
         #expect(labels[0].screenID != labels[2].screenID)
         #expect(labels[0].screenID == labels[3].screenID)
         #expect(labels[4].screenID != labels[5].screenID)
-        let named = try ScreenshotExporter.prepareNamedFiles(files: Array(files.prefix(4)), screenNames: Array(labels.prefix(4)).map(\.name))
+        let named = try await ScreenshotExporter.prepareNamedFiles(files: Array(files.prefix(4)), screenNames: Array(labels.prefix(4)).map(\.name))
         #expect(named.map(\.lastPathComponent) == ["001_capture-a-examiner.png", "002_capture-a-examiner.png", "003_capture-a-examiner.png", "004_capture-a-examiner.png"])
         #expect(try Data(contentsOf: named[0]) == Data(contentsOf: home))
         #expect(FileManager.default.fileExists(atPath: home.path))
@@ -421,20 +516,19 @@ struct ScreenCatalogTests {
         #expect(await attempts.value == 2)
     }
 
-    @Test(.timeLimit(.minutes(1))) func rollingWorkKeepsTwoSlotsBusyAndRestoresInputOrder() async throws {
+    @Test(.timeLimit(.minutes(1))) func orderedWorkKeepsOneSlotBusyAndRestoresInputOrder() async throws {
         let work = CatalogWork()
-        let values = try await ScreenCatalogAnalyzer.concurrentMap([0, 1, 2, 3]) { index in
+        let values = try await ScreenCatalogAnalyzer.orderedMap([0, 1, 2, 3]) { index in
             await work.begin(String(index))
-            if index == 0 { await work.waitForOtherCalls() }
             try Task.checkCancellation()
             await work.end(String(index))
             return index
         }
         #expect(values == [0, 1, 2, 3])
-        #expect(await work.peak == 2)
-        #expect(await work.completed.last == "0")
+        #expect(await work.peak == 1)
+        #expect(await work.completed == ["0", "1", "2", "3"])
         let task = Task {
-            try await ScreenCatalogAnalyzer.concurrentMap([0, 1, 2]) { index in
+            try await ScreenCatalogAnalyzer.orderedMap([0, 1, 2]) { index in
                 try await Task.sleep(for: .seconds(60))
                 return index
             }
@@ -474,21 +568,21 @@ struct ScreenCatalogTests {
         #expect(catalog.classifications[0].stateID == catalog.classifications[2].stateID)
     }
 
-    @Test func semanticFilenamesStaySafeOrderedAndDoNotOverwrite() throws {
+    @Test func semanticFilenamesStaySafeOrderedAndDoNotOverwrite() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
         let file = folder.appendingPathComponent("source.png")
         try Data([1, 2, 3]).write(to: file)
         #expect(ScreenClassification(screenID: 1, name: "Simulation de revenus — Choix du kilométrage").name == "Simulation de revenus Choix du kilométrage")
-        let files = try ScreenshotExporter.prepareNamedFiles(files: [file, file], screenNames: ["../Réglages / Profil", "💥"])
+        let files = try await ScreenshotExporter.prepareNamedFiles(files: [file, file], screenNames: ["../Réglages / Profil", "💥"])
         #expect(files.map(\.lastPathComponent) == ["001_reglages-profil.png", "002_ecran.png"])
-        #expect(try ScreenshotExporter.prepareNamedFiles(files: files, screenNames: ["../Réglages / Profil", "💥"]) == files)
-        let collision = try ScreenshotExporter.prepareNamedFiles(files: [file], screenNames: ["Réglages / Profil"])
+        #expect(try await ScreenshotExporter.prepareNamedFiles(files: files, screenNames: ["../Réglages / Profil", "💥"]) == files)
+        let collision = try await ScreenshotExporter.prepareNamedFiles(files: [file], screenNames: ["Réglages / Profil"])
         #expect(collision[0].lastPathComponent == "001_reglages-profil-2.png")
         #expect(try Data(contentsOf: files[0]) == Data([1, 2, 3]))
-        #expect(throws: ScreenshotExportError.self) {
-            try ScreenshotExporter.prepareNamedFiles(files: [file], screenNames: [])
+        await #expect(throws: ScreenshotExportError.self) {
+            try await ScreenshotExporter.prepareNamedFiles(files: [file], screenNames: [])
         }
     }
 
@@ -545,6 +639,11 @@ struct ScreenCatalogTests {
         try #require(CGImageDestinationFinalize(destination))
         return url
     }
+}
+
+private actor RecognitionCounter {
+    private(set) var value = 0
+    func increment() { value += 1 }
 }
 
 private actor CatalogProgress {

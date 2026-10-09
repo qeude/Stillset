@@ -9,6 +9,7 @@ actor IncrementalCaptures {
     private let preparedRecognition: ScreenCatalogAnalyzer.PreparedRecognition?
     private let onCapture: @Sendable (CapturedScreenshot) async -> Void
     private let export: Export
+    private let work: ProcessingLane?
     private var pending: Task<Void, Error>?
     private var acceptsStates = true
     private var admittedCount = 0
@@ -16,7 +17,7 @@ actor IncrementalCaptures {
     private(set) var completed: [CapturedScreenshot] = []
 
     init(videoURL: URL, folderURL: URL, preparedRecognition: ScreenCatalogAnalyzer.PreparedRecognition?,
-         export: @escaping Export = { states, video, folder, ordinal, callback in
+         work: ProcessingLane? = nil, export: @escaping Export = { states, video, folder, ordinal, callback in
              try await ScreenshotExporter.export(states: states, from: video, to: folder,
                                                  startingIndex: ordinal, onScreenshot: callback)
          }, onCapture: @escaping @Sendable (CapturedScreenshot) async -> Void) {
@@ -24,6 +25,7 @@ actor IncrementalCaptures {
         self.folderURL = folderURL
         self.preparedRecognition = preparedRecognition
         self.export = export
+        self.work = work
         self.onCapture = onCapture
     }
 
@@ -47,13 +49,20 @@ actor IncrementalCaptures {
         let ordinal = admittedCount
         admittedCount += states.count
         let export = export
+        let work = work
         let videoURL = videoURL
         let folderURL = folderURL
         pending = Task {
             try Task.checkCancellation()
-            _ = try await export(states, videoURL, folderURL, ordinal) { index, url in
-                if ordinal + index == 0 { self.preparedRecognition?.start(fileURL: url) }
+            let callback: @Sendable (Int, URL) async -> Void = { index, url in
+                if ordinal + index == 0 { self.preparedRecognition?.start(fileURL: url, work: work ?? .standalone()) }
                 await self.commit(CapturedScreenshot(state: states[index], fileURL: url))
+            }
+            if let work {
+                _ = try await ScreenshotExporter.export(states: states, from: videoURL, to: folderURL,
+                    startingIndex: ordinal, work: work, onScreenshot: callback)
+            } else {
+                _ = try await export(states, videoURL, folderURL, ordinal, callback)
             }
         }
     }
