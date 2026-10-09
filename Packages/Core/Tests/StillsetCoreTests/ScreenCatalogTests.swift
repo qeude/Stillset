@@ -6,6 +6,7 @@ import FoundationModels
 import ImageIO
 @testable import StillsetCore
 import Testing
+import Synchronization
 import UniformTypeIdentifiers
 
 struct ScreenCatalogTests {
@@ -90,6 +91,28 @@ struct ScreenCatalogTests {
         #expect(catalog.classifications[0].stateID == catalog.classifications[1].stateID)
     }
 
+    @Test func knownEmptyRecognitionDoesNotRepeatOCRAfterModelFailure() async throws {
+        let url = URL(fileURLWithPath: "/stillset-missing-file.png")
+        let fallback = AttemptCount()
+        let recognize: @Sendable (URL) async throws -> String? = { input in
+            #expect(input == url)
+            await fallback.record()
+            return "Profil"
+        }
+        let knownEmpty = try await ScreenSemanticNamer.nameWithFallback(url, recognizedTitle: .known(nil),
+                                                                       recognizeTitle: recognize) {
+            throw LanguageModelError.guardrailViolation(.init(debugDescription: "Blocked"))
+        }
+        #expect(knownEmpty.name == "Capture à examiner" && knownEmpty.error != nil && !knownEmpty.usedVision)
+        #expect(await fallback.value == 0)
+        let missing = try await ScreenSemanticNamer.nameWithFallback(url, recognizedTitle: .missing,
+                                                                    recognizeTitle: recognize) {
+            throw LanguageModelError.guardrailViolation(.init(debugDescription: "Blocked"))
+        }
+        #expect(missing.name == "Profil" && missing.error == nil && missing.usedVision)
+        #expect(await fallback.value == 1)
+    }
+
     @Test(.enabled(if: ProcessInfo.processInfo.environment["STILLSET_TEST_FRONTMOST_DIRECTORY"] != nil))
     func foregroundPickerAndRepeatedFormHaveOneStateEach() async throws {
         let directory = try #require(ProcessInfo.processInfo.environment["STILLSET_TEST_FRONTMOST_DIRECTORY"])
@@ -149,7 +172,7 @@ struct ScreenCatalogTests {
     @Test func retriesTransientErrorsOnceAndUsesRecognizedTitleAfterFailure() async throws {
         let home = URL(fileURLWithPath: "/stillset-missing-file.png")
         let attempts = AttemptCount()
-        let result = try await ScreenSemanticNamer.nameWithFallback(home, recognizedTitle: "Accueil") {
+        let result = try await ScreenSemanticNamer.nameWithFallback(home, recognizedTitle: .known("Accueil")) {
             await attempts.record()
             throw LanguageModelError.timeout(.init(debugDescription: "Temporary"))
         }
@@ -158,7 +181,7 @@ struct ScreenCatalogTests {
         #expect(result.usedVision)
         #expect(result.error == nil)
         let refusal = AttemptCount()
-        let refused = try await ScreenSemanticNamer.nameWithFallback(home, recognizedTitle: "Accueil") {
+        let refused = try await ScreenSemanticNamer.nameWithFallback(home, recognizedTitle: .known("Accueil")) {
             await refusal.record()
             throw LanguageModelError.guardrailViolation(.init(debugDescription: "Blocked"))
         }
@@ -253,9 +276,30 @@ struct ScreenCatalogTests {
         let list = try #require(ProcessInfo.processInfo.environment["STILLSET_TEST_FAST_CATALOG_LIST"])
         let files = try String(contentsOfFile: list, encoding: .utf8).split(separator: "\n")
             .map { URL(fileURLWithPath: String($0)) }
+        let first = try #require(files.first)
+        let firstBytes = try Data(contentsOf: first)
+        let observations = Mutex<(started: ContinuousClock.Instant?, calls: Int)>((nil, 0))
+        let recognize: @Sendable (Data) async throws -> ScreenVisionFallback.Recognition = { data in
+            if data == firstBytes {
+                observations.withLock { value in
+                    value.started = value.started ?? .now
+                    value.calls += 1
+                }
+            }
+            return try await ScreenVisionFallback.recognize(data)
+        }
+        let prepared = ScreenCatalogAnalyzer.PreparedRecognition(recognize: recognize)
+        defer { prepared.cancel() }
         let start = ContinuousClock.now
-        let catalog = try await ScreenCatalogAnalyzer().analyze(fileURLs: files, useFoundationModels: false)
+        prepared.start(fileURL: first)
+        let analysisStart = ContinuousClock.now
+        let catalog = try await ScreenCatalogAnalyzer(recognize: recognize).analyze(
+            fileURLs: files, useFoundationModels: false, preparedRecognition: prepared)
         let elapsed = start.duration(to: .now)
+        let (ocrStart, calls) = observations.withLock { $0 }
+        let firstStarted = try #require(ocrStart)
+        #expect(calls == 1)
+        print("Stillset first PNG OCR: startRelativeToAnalysis=\(analysisStart.duration(to: firstStarted)), calls=\(calls)")
         #expect(elapsed < .seconds(10))
         #expect(catalog.classifications.count == files.count && catalog.recognitionFailures == 0)
         #expect(catalog.errorDescription == nil)
@@ -446,6 +490,33 @@ struct ScreenCatalogTests {
         #expect(throws: ScreenshotExportError.self) {
             try ScreenshotExporter.prepareNamedFiles(files: [file], screenNames: [])
         }
+    }
+
+    @Test func preparedRealVisionMatchesUnpreparedCatalog() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let home = try screenshot(title: "Accueil", offset: 0, folder: folder)
+        let details = try screenshot(title: "Details", offset: 0, folder: folder)
+        let counts = Mutex<[Data: Int]>([:])
+        let recognize: ScreenCatalogAnalyzer.Recognition = { data, image in
+            counts.withLock { $0[data, default: 0] += 1 }
+            return try await ScreenVisionFallback.recognize(image)
+        }
+        let prepared = ScreenCatalogAnalyzer.PreparedRecognition(recognizeImage: recognize)
+        defer { prepared.cancel() }
+        prepared.start(fileURL: home)
+        let files = [home, details, home]
+        let catalog = try await ScreenCatalogAnalyzer(recognizeImage: recognize).analyze(
+            fileURLs: files, useFoundationModels: false, preparedRecognition: prepared)
+        let baseline = try await ScreenCatalogAnalyzer().analyze(fileURLs: files, useFoundationModels: false)
+        #expect(catalog.classifications == baseline.classifications)
+        #expect(catalog.classifications.map(\.name) == ["Accueil", "Details", "Accueil"])
+        #expect(catalog.classifications[0].stateID == catalog.classifications[2].stateID)
+        #expect(catalog.recognitionFailures == 0 && catalog.errorDescription == nil)
+        let homeBytes = try Data(contentsOf: home)
+        #expect(counts.withLock { $0[homeBytes] } == 1)
+        #expect(counts.withLock { $0.values.reduce(0, +) } == 2)
     }
 
     private func screenshot(title: String?, offset: CGFloat, folder: URL) throws -> URL {

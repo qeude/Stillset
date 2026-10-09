@@ -56,10 +56,10 @@ struct SelectionOrderTests {
         #expect(model.groupsTimelineByScreen && model.screenshots.count == 4)
     }
 
-    @Test func refinementKeepsResultsUsableAndIgnoresAnOlderImport() {
+    @Test func refinementKeepsResultsUsableAndIgnoresAnOlderImport() async {
         let (model, ids) = makeModel()
         model.selectScreenshot(ids[0], modifiers: [])
-        model.refinementDetail = "Affinage IA"
+        model.refineScreens()
         #expect(model.canSaveSelection && !model.isWorking)
         let files = model.screenshots.map(\.fileURL)
         let labels = ids.map { _ in ScreenClassification(screenID: 1, name: "Compte", stateID: 1) }
@@ -71,6 +71,7 @@ struct SelectionOrderTests {
         #expect(model.screenshots.map(\.id) == ids && model.visibleScreenshots.count == 1)
         #expect(model.selectedScreenshotIDs == [ids[0]])
         model.cancelRefinement()
+        await model.waitForRefinement()
         #expect(model.refinementDetail == nil && model.canSaveSelection)
     }
 
@@ -204,12 +205,12 @@ struct SelectionOrderTests {
         #expect(model.selectedScreenshotIDs == [ids[3]])
         #expect(model.followsLatest && model.notice == "À conserver")
         model.setTimelineGrouping(true)
-        model.isAnalyzing = true
+        model.setPreviewAnalysisRunning(true)
         model.followsLatest = true
         model.selectTimelineScreenGroup(2)
         #expect(model.selectedScreenshotIDs == [ids[3]])
         #expect(model.followsLatest && model.notice == "À conserver")
-        model.isAnalyzing = false
+        model.setPreviewAnalysisRunning(false)
         model.selectTimelineScreenGroup(99)
         #expect(model.selectedScreenshotIDs == [ids[3]])
         #expect(model.focusedScreenshotID == ids[3] && model.focusNavigationID == ids[3])
