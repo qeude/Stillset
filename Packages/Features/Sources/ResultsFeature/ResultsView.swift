@@ -93,7 +93,7 @@ struct ResultsView: View {
 
     private var progressFooter: some View {
         return VStack {
-            if model.isWorking {
+            if model.isAnalyzing {
                 VStack(spacing: 7) {
                     HStack(spacing: 6) {
                         if model.isAnalyzing && model.progress.stage == .decoding {
@@ -106,16 +106,11 @@ struct ResultsView: View {
 
                         Spacer()
 
-                        if model.isAnalyzing && model.progress.stage == .exporting {
-                            Text("\(model.screenshots.count) sur \(model.detectedScreens.count)")
-                                .monospacedDigit()
-                        } else if !model.isAnalyzing {
-                            Text(model.progress.fraction.formatted(.percent.precision(.fractionLength(0))))
-                                .monospacedDigit()
-                                .foregroundStyle(StillsetStyle.accent)
-                        }
+                        Text("\(model.screenshots.count) captures")
+                            .monospacedDigit()
 
                         Button("Annuler", action: model.cancel)
+                            .accessibilityLabel("Annuler l’analyse")
                             .buttonStyle(.plain)
                             .foregroundStyle(StillsetStyle.muted)
                             .padding(.leading, 8)
@@ -127,7 +122,8 @@ struct ResultsView: View {
                 }
                 .frame(maxWidth: 420)
                 .frame(maxWidth: .infinity)
-            } else if let detail = model.refinementDetail {
+            }
+            if let detail = model.refinementDetail {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text(detail).foregroundStyle(StillsetStyle.muted)
@@ -135,7 +131,23 @@ struct ResultsView: View {
                         .buttonStyle(.link)
                 }
                 .font(.caption)
-            } else if let notice = model.notice {
+            }
+            if let save = model.saveProgress {
+                VStack(spacing: 7) {
+                    HStack {
+                        Text("Enregistrement des PNG…")
+                        Spacer()
+                        Text(save.fraction.formatted(.percent.precision(.fractionLength(0))))
+                            .monospacedDigit()
+                        Button("Annuler l’enregistrement", action: model.cancelSave)
+                            .buttonStyle(.link)
+                    }
+                    StageProgressBar(fraction: save.fraction, previewReduceMotion: reduceMotion)
+                }
+                .font(.caption)
+                .frame(maxWidth: 420)
+            }
+            if let notice = model.notice {
                 HStack(spacing: 8) {
                     Text(notice)
                         .foregroundStyle(StillsetStyle.muted)

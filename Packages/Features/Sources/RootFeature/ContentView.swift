@@ -34,7 +34,7 @@ public struct StillsetRootView: View {
                 }
                 .visibilityPriority(.low)
                 ToolbarSpacer(.flexible)
-                if !model.isWorking {
+                if !model.isAnalyzing {
                     ToolbarItem(placement: .automatic) {
                         filtersMenu
                     }
@@ -51,7 +51,7 @@ public struct StillsetRootView: View {
                     Button("Affiner avec l’IA…", systemImage: "sparkles", action: model.refineScreens)
                         .labelStyle(.iconOnly)
                         .accessibilityLabel("Affiner avec l’IA…")
-                        .disabled(model.isWorking || model.screenshots.isEmpty || model.refinementDetail != nil)
+                        .disabled(model.isAnalyzing || model.screenshots.isEmpty || model.refinementDetail != nil)
                         .help("Affiner avec l’IA")
                 }
                 .visibilityPriority(.high)

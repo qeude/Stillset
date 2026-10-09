@@ -94,7 +94,7 @@ enum ScreenSemanticNamer {
             let (offset, index) = item
             let session = preparedSessions.indices.contains(offset) ? preparedSessions[offset] : makeSession()
             session.prewarm()
-            let result = try await nameWithFallback(fileURLs[index], recognizedTitle: recognition[index]?.title) {
+            let result = try await nameWithFallback(fileURLs[index], recognizedTitle: recognition[index].map { .known($0.title) } ?? .missing) {
                 guard isAvailable else { throw CocoaError(.featureUnsupported) }
                 let image = try ScreenCatalogAnalyzer.proxyImage(fileURLs[index])
                 let response = try await session.respond(to: Prompt {
@@ -152,8 +152,15 @@ enum ScreenSemanticNamer {
         }
     }
 
+    enum RecognizedTitle: Sendable {
+        case missing
+        case known(String?)
+    }
+
     static func nameWithFallback(
-        _ url: URL, recognizedTitle: String? = nil, operation: @Sendable () async throws -> String
+        _ url: URL, recognizedTitle: RecognizedTitle = .missing,
+        recognizeTitle: @Sendable (URL) async throws -> String? = ScreenVisionFallback.name,
+        operation: @Sendable () async throws -> String
     ) async throws -> ScreenNameResult {
         do { return ScreenNameResult(name: try await retryOnce(operation), error: nil) }
         catch is CancellationError { throw CancellationError() }
@@ -162,8 +169,10 @@ enum ScreenSemanticNamer {
             Logger(subsystem: "com.stillflow.app", category: "ImageAnalysis").error("Image naming failed: \(String(describing: error), privacy: .public)")
             do {
                 let title: String?
-                if let recognizedTitle { title = recognizedTitle }
-                else { title = try await ScreenVisionFallback.name(url) }
+                switch recognizedTitle {
+                case .known(let value): title = value
+                case .missing: title = try await recognizeTitle(url)
+                }
                 if let title, !title.isEmpty {
                     return ScreenNameResult(name: title, error: nil, usedVision: true)
                 }
