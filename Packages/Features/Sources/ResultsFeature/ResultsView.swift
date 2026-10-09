@@ -7,471 +7,216 @@ import UniformTypeIdentifiers
 
 struct ResultsView: View {
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
-    var model: AppModel
+    @State private var keyboardTarget = TimelineKeyboardTarget()
+    var model: SessionModel
+    var cancelSingleVideo: () -> Void
     var previewReduceMotion = false
-
     private var reduceMotion: Bool { systemReduceMotion || previewReduceMotion }
+    private var showsSessionStatus: Bool {
+        model.imports.models.count > 1
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            preview
+            SessionPreview(model: model, reduceMotion: reduceMotion, keyboardTarget: keyboardTarget)
+                .id(ObjectIdentifier(model))
+                .transition(.opacity)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: ObjectIdentifier(model))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            if model.isAnalyzing || !model.screenshots.isEmpty {
-                ResultsTimelineHeader(model: model, reduceMotion: reduceMotion)
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 16)
-            }
-
-            if model.isWorking || model.refinementDetail != nil || model.notice != nil {
-                progressFooter
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 16)
-            }
-
-            if model.isAnalyzing || !model.screenshots.isEmpty {
-                if let focused = model.focusedScreenshot,
-                   let screen = model.screenClassifications[focused.id] {
-                    Text(verbatim: screen.name)
-                        .font(.system(size: 13))
-                        .foregroundStyle(StillsetStyle.muted)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .help("Nom de l’écran")
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, 8)
+            HStack(spacing: 12) {
+                CaptureCount(model: model, reduceMotion: reduceMotion)
+                if showsSessionStatus {
+                    SessionStatusButton(session: model)
+                        .id(ObjectIdentifier(model))
+                        .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.95)))
                 }
-                timeline
             }
+            .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: showsSessionStatus)
+            .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: model.imports.models.count > 1)
+            .padding(.bottom, 12)
+            if !showsSessionStatus, let video = model.imports.models.first {
+                SingleVideoStatus(video: video, session: model, cancel: cancelSingleVideo, reduceMotion: reduceMotion)
+            } else {
+                Color.clear.frame(height: 36).accessibilityHidden(true)
+            }
+            SessionExportStatus(model: model)
+            SessionNotice(model: model)
+            SessionTimeline(model: model, reduceMotion: reduceMotion, keyboardTarget: keyboardTarget)
+                .id(ObjectIdentifier(model))
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: model.isAnalyzing)
+        .environment(\.thumbnailLoader, model.thumbnailLoader)
         .transaction { if reduceMotion { $0.animation = nil } }
-    }
-
-    @ViewBuilder
-    private var preview: some View {
-        GeometryReader { geometry in
-            let aspectRatio = videoAspectRatio
-            let maxHeight = min(geometry.size.height * 0.88, geometry.size.width * 0.68 / aspectRatio, 620)
-            let imageSize = CGSize(width: maxHeight * aspectRatio, height: maxHeight)
-
-            ZStack {
-                if !model.analysisPreviewFrames.isEmpty {
-                    AnalysisFramePreview(
-                        frames: model.analysisPreviewFrames,
-                        startedAt: model.analysisStartedAt,
-                        isAnimating: isShowingFrameAnalysis
-                    )
-                        .frame(width: imageSize.width, height: imageSize.height)
-                        .modifier(PreviewImageChrome())
-                        .transition(reduceMotion ? .identity : .opacity)
-                }
-
-                if shouldShowScreenshotPreview {
-                    PhotoStackPreview(model: model, imageSize: imageSize, previewReduceMotion: reduceMotion)
-                        .transition(.identity)
-                } else if model.analysisPreviewFrames.isEmpty {
-                    ProgressView()
-                        .tint(StillsetStyle.accent)
-                        .transition(reduceMotion ? .identity : .opacity)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.4), value: isShowingFrameAnalysis)
+        .overlay(alignment: .topLeading) {
+            TimelineKeyboardBridge(target: keyboardTarget, onArrow: { model.moveFocus(by: $0, modifiers: $1) })
+                .id(ObjectIdentifier(keyboardTarget))
+                .frame(width: 1, height: 1)
         }
-    }
-
-    private var shouldShowScreenshotPreview: Bool {
-        model.focusedScreenshot != nil
-    }
-
-    private var isShowingFrameAnalysis: Bool {
-        model.isAnalyzing && model.progress.stage == .decoding && !model.analysisPreviewFrames.isEmpty
-    }
-
-    private var progressFooter: some View {
-        return VStack {
-            if model.isAnalyzing {
-                VStack(spacing: 7) {
-                    HStack(spacing: 6) {
-                        if model.isAnalyzing && model.progress.stage == .decoding {
-                            Text("Recherche d’écrans…")
-                        } else if model.progress.stage == .annotating {
-                            Text("Organisation des captures…")
-                        } else {
-                            Text("Création des captures…")
-                        }
-
-                        Spacer()
-
-                        Text("\(model.screenshots.count) captures")
-                            .monospacedDigit()
-
-                        Button("Annuler", action: model.cancel)
-                            .accessibilityLabel("Annuler l’analyse")
-                            .buttonStyle(.plain)
-                            .foregroundStyle(StillsetStyle.muted)
-                            .padding(.leading, 8)
-                    }
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(StillsetStyle.muted)
-
-                    StageProgressBar(fraction: model.progress.fraction, previewReduceMotion: reduceMotion)
-                }
-                .frame(maxWidth: 420)
-                .frame(maxWidth: .infinity)
-            }
-            if let detail = model.refinementDetail {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text(detail).foregroundStyle(StillsetStyle.muted)
-                    Button("Arrêter l’affinage", action: model.cancelRefinement)
-                        .buttonStyle(.link)
-                }
-                .font(.caption)
-            }
-            if let save = model.saveProgress {
-                VStack(spacing: 7) {
-                    HStack {
-                        Text("Enregistrement des PNG…")
-                        Spacer()
-                        Text(save.fraction.formatted(.percent.precision(.fractionLength(0))))
-                            .monospacedDigit()
-                        Button("Annuler l’enregistrement", action: model.cancelSave)
-                            .buttonStyle(.link)
-                    }
-                    StageProgressBar(fraction: save.fraction, previewReduceMotion: reduceMotion)
-                }
-                .font(.caption)
-                .frame(maxWidth: 420)
-            }
-            if let notice = model.notice {
-                HStack(spacing: 8) {
-                    Text(notice)
-                        .foregroundStyle(StillsetStyle.muted)
-                        .transition(reduceMotion ? .identity : .opacity)
-
-                    if model.exportedFolderURL != nil {
-                        Button("Afficher dans le Finder", action: model.showExportedFolder)
-                            .buttonStyle(.link)
-                    }
-                }
-                .font(.caption)
-            }
-        }
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: model.isWorking)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: model.notice)
-    }
-
-    private var allTimelineOccurrences: [TimelineOccurrence] {
-        if model.isAnalyzing {
-            return TimelineOccurrence.analyzing(screens: model.detectedScreens, screenshots: model.screenshots)
-        }
-        return model.screenshots.map { TimelineOccurrence(state: $0.state, capture: $0) }
-    }
-
-    private var timeline: some View {
-        let thumbnailWidth = min(160, max(48, 112 * videoAspectRatio))
-        let isGrouped = model.groupsTimelineByScreen && !model.isAnalyzing
-        let groups = model.isAnalyzing ? [] : model.timelineScreenGroups
-        let sourceOccurrences = allTimelineOccurrences
-        var groupRanks = Dictionary(uniqueKeysWithValues: groups.enumerated().map { ($0.element.id, $0.offset) })
-        for occurrence in sourceOccurrences {
-            let screenID = model.screenClassifications[occurrence.id]?.screenID
-            if groupRanks[screenID] == nil { groupRanks[screenID] = groupRanks.count }
-        }
-        let occurrences = isGrouped ? sourceOccurrences.enumerated().sorted {
-            let lhsRank = groupRanks[model.screenClassifications[$0.element.id]?.screenID, default: 0]
-            let rhsRank = groupRanks[model.screenClassifications[$1.element.id]?.screenID, default: 0]
-            return lhsRank == rhsRank ? $0.offset < $1.offset : lhsRank < rhsRank
-        }.map(\.element) : sourceOccurrences
-        let visibleIDs = model.isAnalyzing ? occurrences.map(\.id) : model.visibleScreenshots.map(\.id)
-        let visibleRanks = Dictionary(uniqueKeysWithValues: visibleIDs.enumerated().map { ($0.element, $0.offset) })
-        let groupEnds = isGrouped ? Set(groups.compactMap { $0.screenshots.last?.id }) : []
-        let presentation = TimelinePresentation(
-            grouped: isGrouped, unique: model.showsUniqueScreens, visibleIDs: visibleIDs,
-            headers: groups.map { .init(screenID: $0.id, name: $0.name, memberIDs: $0.screenshots.map(\.id)) },
-            navigationID: model.focusNavigationID
-        )
-        let animation: Animation? = reduceMotion ? nil : .smooth(duration: 0.36)
-
-        return ScrollViewReader { proxy in
-            ScrollView(.horizontal) {
-                TimelineGroupLayout(isGrouped: isGrouped) {
-                    ForEach(occurrences) { occurrence in
-                        let isVisible = visibleRanks[occurrence.id] != nil
-                        timelineCell(occurrence, thumbnailWidth: thumbnailWidth,
-                                     visibleRanks: visibleRanks,
-                                     isLast: occurrence.id == visibleIDs.last || groupEnds.contains(occurrence.id))
-                            .layoutValue(key: TimelineGroupIndex.self,
-                                         value: isVisible ? (isGrouped ? groupRanks[model.screenClassifications[occurrence.id]?.screenID, default: 0] : 0) : -1)
-                            .opacity(isVisible ? 1 : 0)
-                            .allowsHitTesting(isVisible)
-                            .disabled(!isVisible)
-                            .accessibilityHidden(!isVisible)
-                            .id(occurrence.id)
-                    }
-                    ForEach(groups, id: \.id) { group in
-                        let selectedCount = group.screenshots.filter { model.selectedScreenshotIDs.contains($0.id) }.count
-                        Button {
-                            model.selectTimelineScreenGroup(group.id)
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(verbatim: group.name)
-                                    .font(.caption.weight(.semibold))
-                                    .lineLimit(nil)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .multilineTextAlignment(.leading)
-                            }
-                            .padding(6)
-                            .frame(maxWidth: 240, alignment: .leading)
-                            .background(StillsetStyle.accent.opacity(selectedCount == group.screenshots.count ? 0.14 : 0),
-                                        in: RoundedRectangle(cornerRadius: 6))
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.borderless)
-                        .accessibilityLabel("\(group.name), \(group.screenshots.count) captures visibles")
-                        .accessibilityValue("\(selectedCount) sur \(group.screenshots.count) sélectionnées")
-                        .accessibilityHint("Sélectionne les captures visibles de cet écran")
-                        .onKeyPress(.leftArrow) {
-                            model.moveFocus(by: -1)
-                            return .handled
-                        }
-                        .onKeyPress(.rightArrow) {
-                            model.moveFocus(by: 1)
-                            return .handled
-                        }
-                        .layoutValue(key: TimelineGroupIndex.self, value: groupRanks[group.id, default: 0])
-                        .layoutValue(key: TimelineGroupHeader.self, value: true)
-                        .opacity(isGrouped ? 1 : 0)
-                        .allowsHitTesting(isGrouped)
-                        .disabled(!isGrouped)
-                        .accessibilityHidden(!isGrouped)
-                    }
-                }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 10)
-            }
-            .overlay {
-                if visibleIDs.isEmpty {
-                    TimelineEmptyState()
-                }
-            }
-            .scrollIndicators(.never)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(minHeight: 158)
-            .layoutPriority(1)
-            .animation(animation, value: presentation)
-            .onChange(of: model.detectedScreens.count) {
-                if model.isAnalyzing, model.followsLatest, let last = model.detectedScreens.last,
-                   visibleRanks[last.id] != nil {
-                    withAnimation(reduceMotion ? nil : .smooth(duration: 0.4)) {
-                        proxy.scrollTo(last.id, anchor: .trailing)
-                    }
-                }
-            }
-            .onChange(of: model.screenshots.count) {
-                if model.followsLatest, let last = model.screenshots.last,
-                   visibleRanks[last.id] != nil {
-                    withAnimation(reduceMotion ? nil : .smooth(duration: 0.4)) {
-                        proxy.scrollTo(last.id, anchor: .trailing)
-                    }
-                }
-            }
-            .onChange(of: presentation) { old, new in
-                guard !model.isAnalyzing else { return }
-                let displayChanged = old.grouped != new.grouped || old.unique != new.unique
-                    || old.visibleIDs != new.visibleIDs
-                    || old.headers.map(\.screenID) != new.headers.map(\.screenID)
-                    || old.headers.map(\.memberIDs) != new.headers.map(\.memberIDs)
-                if displayChanged, let focusedID = model.focusedScreenshotID, visibleRanks[focusedID] != nil {
-                    withAnimation(animation) { proxy.scrollTo(focusedID, anchor: old.grouped != new.grouped ? .center : nil) }
-                } else if old.navigationID != new.navigationID,
-                          let navigationID = new.navigationID, visibleRanks[navigationID] != nil {
-                    withAnimation(animation) { proxy.scrollTo(navigationID) }
-                }
-            }
-        }
-    }
-
-    private func timelineCell(_ occurrence: TimelineOccurrence, thumbnailWidth: CGFloat,
-                              visibleRanks: [UUID: Int], isLast: Bool) -> some View {
-        let visibleRank = visibleRanks[occurrence.id]
-        let isVisible = visibleRank != nil
-        let index = visibleRank ?? 0
-        let trailingGap: CGFloat = isLast ? 0 : 12
-        let isSelected = model.selectedScreenshotIDs.contains(occurrence.id)
-        let screen = model.screenClassifications[occurrence.id]
-        return TimelineOccurrenceCell(
-            occurrence: occurrence,
-            index: index,
-            width: thumbnailWidth,
-            isSelected: isSelected,
-            previewReduceMotion: reduceMotion
-        )
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Capture \(index + 1), \(occurrence.state.representativeTimestamp.stillsetTimecode)")
-        .accessibilityValue("En attente")
-        .accessibilityHidden(!isVisible || occurrence.capture != nil)
-        .overlay {
-            if let screenshot = occurrence.capture {
-                TimelineDragView(
-                    fileURLs: isVisible ? model.dragURLs(startingAt: screenshot.id) : [],
-                    accessibilityText: "Capture \(index + 1), \(screenshot.state.representativeTimestamp.stillsetTimecode)\(isSelected ? ", sélectionnée" : "")\(screen.map { ", écran \($0.screenID), \($0.name)" } ?? "")",
-                    onClick: { modifiers in
-                        if isVisible { model.selectScreenshot(screenshot.id, modifiers: modifiers) }
-                    },
-                    onArrow: { offset in
-                        if isVisible { model.moveFocus(by: offset) }
-                    }
-                )
-                .opacity(isVisible ? 1 : 0)
-                .allowsHitTesting(isVisible)
-                .disabled(!isVisible)
-                .accessibilityHidden(!isVisible)
-            }
-        }
-        .help(screen.map { "Écran \($0.screenID) · \($0.name) · \(occurrence.state.representativeTimestamp.stillsetTimecode)" } ?? occurrence.state.representativeTimestamp.stillsetTimecode)
-        .compositingGroup()
-        .opacity(isVisible ? 1 : 0)
-        .geometryGroup()
-        .frame(width: isVisible ? thumbnailWidth + 6 + trailingGap : 0, height: 136, alignment: .leading)
-        .contentShape(Rectangle())
-        .allowsHitTesting(isVisible)
-        .disabled(!isVisible)
-    }
-
-    private var videoAspectRatio: CGFloat {
-        guard let frame = model.analysisPreviewFrames.last,
-              let width = frame.previewWidth,
-              let height = frame.previewHeight,
-              height > 0 else { return 9.0 / 19.0 }
-        return CGFloat(width) / CGFloat(height)
+        .onChange(of: ObjectIdentifier(model)) { keyboardTarget = TimelineKeyboardTarget() }
     }
 }
 
-private struct ResultsTimelineHeader: View {
-    var model: AppModel
+private struct SingleVideoStatus: View {
+    let video: AppModel
+    let session: SessionModel
+    let cancel: () -> Void
+    let reduceMotion: Bool
+
+    private var isVisible: Bool {
+        video.importState.isPending || video.importState.canRetry || session.refinementDetail != nil
+    }
+
+    var body: some View {
+        ZStack {
+            if isVisible {
+                HStack(spacing: 12) {
+                    if video.importState.isPending {
+                        ProgressView(value: video.progress.fraction)
+                            .tint(StillsetStyle.accent)
+                            .frame(width: 240)
+                            .accessibilityLabel("Progression de l’analyse")
+                    }
+                    if video.importState == .running || video.importState == .queued {
+                        Button("Annuler", systemImage: "stop.circle", action: cancel)
+                            .help("Annuler l’analyse")
+                    } else if video.importState.canRetry {
+                        Button("Réessayer", systemImage: "arrow.clockwise") { session.imports.retry(video) }
+                            .disabled(!session.imports.canRetry(video))
+                    }
+                    if session.refinementDetail != nil {
+                        Button("Arrêter l’affinage", action: session.cancelRefinement)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .tint(.primary)
+                .transition(.opacity)
+            }
+        }
+        .frame(height: 36, alignment: .top)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: isVisible)
+    }
+}
+
+private struct CaptureCount: View {
+    let model: SessionModel
     let reduceMotion: Bool
 
     var body: some View {
-        count
-            .frame(maxWidth: .infinity)
-            .frame(height: 40)
-    }
-
-    private var count: some View {
-        let count = model.isAnalyzing ? model.detectedScreens.count : model.visibleScreenshots.count
-        let countLabel = model.showsUniqueScreens && !model.isAnalyzing
-            ? "capture\(count == 1 ? "" : "s") unique\(count == 1 ? "" : "s")"
-            : "capture\(count == 1 ? "" : "s") trouvée\(count == 1 ? "" : "s")"
-        return Text("\(count.formatted()) \(countLabel)")
+        let count = model.visibleCaptureCount
+        let videoCount = model.imports.models.count
+        let videos = videoCount > 1 ? " · \(videoCount) vidéos" : ""
+        Text("\(count) capture\(count == 1 ? "" : "s")\(model.showsUniqueScreens ? " uniques" : "")\(videos)")
+            .font(.system(size: 24, weight: .semibold))
             .monospacedDigit()
-            .font(.system(size: 28, weight: .semibold))
             .foregroundStyle(StillsetStyle.ink)
-            .multilineTextAlignment(.center)
-            .fixedSize(horizontal: false, vertical: true)
             .contentTransition(reduceMotion ? .identity : .numericText(value: Double(count)))
             .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: count)
     }
 }
 
-private struct TimelineGroupIndex: LayoutValueKey {
-    static let defaultValue = -1
+private struct SessionExportStatus: View {
+    let model: SessionModel
+
+    var body: some View {
+        if model.isExporting {
+            HStack {
+                Text(model.progress.detail)
+                ProgressView(value: model.progress.fraction).frame(width: 180)
+                Button("Annuler l’export", action: model.cancelExport)
+            }.font(.caption).padding(.bottom, 8)
+        }
+    }
 }
 
-private struct TimelineGroupHeader: LayoutValueKey {
-    static let defaultValue = false
+private struct SessionNotice: View {
+    let model: SessionModel
+
+    var body: some View {
+        if let notice = model.errorMessage ?? model.notice
+            ?? (model.imports.models.count == 1 ? model.imports.models.first?.importState.failure : nil) {
+            HStack {
+                Text(notice)
+                if model.exportedFolderURL != nil {
+                    Button("Afficher dans le Finder", action: model.showExportedFolder)
+                }
+            }.font(.caption).padding(.bottom, 8)
+        }
+    }
 }
 
-private struct TimelineGroupLayout: Layout {
-    let isGrouped: Bool
+private struct SessionPreview: View {
+    let model: SessionModel
+    let reduceMotion: Bool
+    let keyboardTarget: TimelineKeyboardTarget
 
-    private struct Arrangement {
-        var size: CGSize = .zero
-        var positions: [Int: CGPoint] = [:]
-        var proposals: [Int: ProposedViewSize] = [:]
-    }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        arrangement(subviews).size
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let result = arrangement(subviews)
-        for index in subviews.indices {
-            let position = result.positions[index] ?? .zero
-            subviews[index].place(at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y),
-                                  anchor: .topLeading, proposal: result.proposals[index] ?? .zero)
-        }
-    }
-
-    private func arrangement(_ subviews: Subviews) -> Arrangement {
-        let headers = subviews.indices.filter { subviews[$0][TimelineGroupHeader.self] }
-        let headerSizes = Dictionary(uniqueKeysWithValues: headers.map { index in
-            let idealWidth = subviews[index].sizeThatFits(.unspecified).width
-            let proposal = ProposedViewSize(width: min(240, idealWidth), height: nil)
-            return (index, subviews[index].sizeThatFits(proposal))
-        })
-        let headerHeight = headerSizes.values.map(\.height).max() ?? 0
-        let groups = Dictionary(grouping: subviews.indices.filter {
-            subviews[$0][TimelineGroupIndex.self] >= 0
-                && (isGrouped || !subviews[$0][TimelineGroupHeader.self])
-        }) {
-            subviews[$0][TimelineGroupIndex.self]
-        }
-        var result = Arrangement()
-        for (index, size) in headerSizes {
-            result.proposals[index] = ProposedViewSize(size)
-        }
-        var captureHeight: CGFloat = 0
-        let lastGroupIndex = groups.keys.max()
-        let captureY = headerHeight > 0 ? headerHeight + 6 : 0
-        for groupIndex in groups.keys.sorted() {
-            let indices = groups[groupIndex, default: []]
-            let cells = indices.filter { !subviews[$0][TimelineGroupHeader.self] }
-            let header = indices.first { subviews[$0][TimelineGroupHeader.self] }
-            var groupWidth: CGFloat = 0
-            for index in cells {
-                let size = subviews[index].sizeThatFits(.unspecified)
-                result.positions[index] = CGPoint(x: result.size.width + groupWidth, y: captureY)
-                result.proposals[index] = ProposedViewSize(size)
-                groupWidth += size.width
-                captureHeight = max(captureHeight, size.height)
+    var body: some View {
+        ZStack {
+            if let focused = model.focusedScreenshot {
+                GeometryReader { geometry in
+                    PhotoStackPreview(model: model, keyboardTarget: keyboardTarget, imageSize: previewSize(in: geometry.size, ratio: focused.aspectRatio),
+                        previewReduceMotion: reduceMotion)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .transition(.opacity)
+            } else if let job = model.analysisModel {
+                AnalysisJobPreview(job: job)
+                    .id(job.id)
+                    .transition(.opacity)
+            } else {
+                UnavailableSessionPreview(isAnalyzing: model.isAnalyzing)
+                    .transition(.opacity)
             }
-            if let header, let size = headerSizes[header] {
-                result.positions[header] = CGPoint(x: result.size.width, y: 0)
-                groupWidth = max(groupWidth, size.width)
-            }
-            result.size.width += groupWidth + (groupIndex == lastGroupIndex ? 0 : 20)
         }
-        result.size.height = captureY + captureHeight
-        return result
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.focusedScreenshot != nil)
     }
 }
 
-private struct TimelinePresentation: Equatable {
-    let grouped: Bool
-    let unique: Bool
-    let visibleIDs: [UUID]
-    let headers: [Header]
-    let navigationID: UUID?
+private struct AnalysisJobPreview: View {
+    let job: AppModel
 
-    struct Header: Equatable {
-        let screenID: Int?
-        let name: String
-        let memberIDs: [UUID]
+    var body: some View {
+        GeometryReader { geometry in
+            if !job.analysisPreviewFrames.isEmpty {
+                let frame = job.analysisPreviewFrames.last
+                let ratio = frame.flatMap { frame -> CGFloat? in
+                    guard let width = frame.previewWidth, let height = frame.previewHeight, height > 0 else { return nil }
+                    return CGFloat(width) / CGFloat(height)
+                } ?? 9 / 19
+                let size = previewSize(in: geometry.size, ratio: ratio)
+                AnalysisFramePreview(frames: job.analysisPreviewFrames, startedAt: job.analysisStartedAt,
+                    isAnimating: job.progress.stage == .decoding)
+                    .frame(width: size.width, height: size.height)
+                    .modifier(PreviewImageChrome())
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                UnavailableSessionPreview(isAnalyzing: job.isAnalyzing)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .onAppear { job.previewDemand.setVisible(true) }
+        .onDisappear { job.previewDemand.setVisible(false) }
+    }
+}
+
+private func previewSize(in available: CGSize, ratio: CGFloat) -> CGSize {
+    let height = max(1, min(available.height * 0.88, available.width * 0.68 / ratio, 620))
+    return CGSize(width: height * ratio, height: height)
+}
+
+private struct UnavailableSessionPreview: View {
+    let isAnalyzing: Bool
+
+    var body: some View {
+        ContentUnavailableView("Captures de la session", systemImage: "photo.on.rectangle",
+            description: Text(isAnalyzing ? "Les captures apparaîtront pendant l’analyse." : "Consultez l’état des vidéos pour réessayer ou ajouter un enregistrement."))
     }
 }
 
 private struct PhotoStackPreview: View {
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
 
-    var model: AppModel
+    var model: SessionModel
+    let keyboardTarget: TimelineKeyboardTarget
     let imageSize: CGSize
     var previewReduceMotion = false
 
@@ -482,8 +227,9 @@ private struct PhotoStackPreview: View {
         let height = imageSize.height
         let selectedCount = model.selectedScreenshotIDs.count
         let hasMultipleSelection = selectedCount > 1
-        let sideScreenshots = FannedScreenshot.arranged(model.fanSelectedScreenshots
-            .filter { $0.id != model.focusedScreenshotID }
+        let sideScreenshots = FannedScreenshot.arranged(model.selectedScreenshotOrder.lazy
+            .filter { $0 != model.focusedScreenshotID }
+            .compactMap { model.projection.readyByID[$0] }
             .prefix(8)
             .map { FannedScreenshot(
                 screenshot: $0,
@@ -492,13 +238,14 @@ private struct PhotoStackPreview: View {
         ZStack {
             ForEach(sideScreenshots) { card in
                 let screenshot = card.screenshot
+                let sideHeight = min(height, width / screenshot.aspectRatio)
                 let direction: CGFloat = card.isOnLeft ? -1 : 1
                 let level = card.depth
                 let angle = (7 + level * 5) * Double(direction)
                 let spread: CGFloat = 0.22 + CGFloat(level) * 0.10
 
-                ScreenshotPreview(url: screenshot.fileURL, maxPixelSize: 650)
-                    .frame(width: width, height: height)
+                ScreenshotPreview(url: screenshot.fileURL, maxPixelSize: 650, occurrenceID: screenshot.id, demandPriority: 1)
+                    .frame(width: sideHeight * screenshot.aspectRatio, height: sideHeight)
                     .background(StillsetStyle.surface)
                     .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                     .overlay { RoundedRectangle(cornerRadius: 11).strokeBorder(StillsetStyle.border.opacity(0.5)) }
@@ -522,7 +269,8 @@ private struct PhotoStackPreview: View {
                     url: screenshot.fileURL,
                     maxPixelSize: 1400,
                     occurrenceID: screenshot.id,
-                    animatesCaptureArrival: model.isAnalyzing && model.followsLatest
+                    animatesCaptureArrival: model.isAnalyzing && model.followsLatest,
+                    demandPriority: 2
                 )
                     .frame(width: width, height: height)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -549,10 +297,10 @@ private struct PhotoStackPreview: View {
         .frame(width: width * (hasMultipleSelection ? 3.2 : 1), height: height)
         .overlay {
             TimelineDragView(
-                fileURLs: model.previewDragURLs,
-                accessibilityText: "Aperçu, \(selectedCount) capture\(selectedCount == 1 ? "" : "s") sélectionnée\(selectedCount == 1 ? "" : "s")",
+                urlsForDrag: { model.previewDragURLs },
+                accessibilityText: (model.focusedScreenshot?.provenance ?? "") + ", aperçu, \(selectedCount) capture\(selectedCount == 1 ? "" : "s") sélectionnée\(selectedCount == 1 ? "" : "s")",
                 onClick: nil,
-                onArrow: model.moveFocus(by:)
+                keyboardTarget: keyboardTarget
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -561,13 +309,13 @@ private struct PhotoStackPreview: View {
 }
 
 struct FannedScreenshot: Identifiable {
-    let screenshot: CapturedScreenshot
+    let screenshot: SessionOccurrence
     let selectionSlot: Int
 
     var position: Int = 1
     var depth: Double = 0
 
-    var id: UUID { screenshot.id }
+    var id: OccurrenceID { screenshot.id }
     var isOnLeft: Bool { selectionSlot != 0 && selectionSlot.isMultiple(of: 2) }
 
     static func arranged(_ cards: [Self]) -> [Self] {
@@ -594,94 +342,6 @@ private struct PreviewImageChrome: ViewModifier {
                     .strokeBorder(StillsetStyle.border.opacity(0.5))
             }
             .shadow(color: .black.opacity(0.15), radius: 24, y: 12)
-    }
-}
-
-private struct TimelineOccurrence: Identifiable {
-    let state: UIState
-    let capture: CapturedScreenshot?
-
-    var id: UUID { state.id }
-
-    static func analyzing(screens: [UIState], screenshots: [CapturedScreenshot]) -> [Self] {
-        let capturesByID = Dictionary(uniqueKeysWithValues: screenshots.map { ($0.id, $0) })
-        let detectedIDs = Set(screens.map(\.id))
-        return screens.map { Self(state: $0, capture: capturesByID[$0.id]) }
-            + screenshots.filter { !detectedIDs.contains($0.id) }.map { Self(state: $0.state, capture: $0) }
-    }
-}
-
-private struct TimelineOccurrenceCell: View {
-    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
-
-    let occurrence: TimelineOccurrence
-    let index: Int
-    let width: CGFloat
-    var isSelected = false
-    var previewReduceMotion = false
-
-    private var reduceMotion: Bool {
-        previewReduceMotion || systemReduceMotion
-    }
-
-    var body: some View {
-        VStack(spacing: 6) {
-            ZStack {
-                StillsetStyle.surface
-                Image(systemName: "photo")
-                    .font(.system(size: 16, weight: .light))
-                    .foregroundStyle(StillsetStyle.muted.opacity(0.65))
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Capture \(index + 1), \(occurrence.state.representativeTimestamp.stillsetTimecode)")
-                    .accessibilityValue("En attente")
-                    .accessibilityHidden(occurrence.capture != nil)
-
-                if let screenshot = occurrence.capture {
-                    ScreenshotPreview(
-                        url: screenshot.fileURL,
-                        maxPixelSize: 180,
-                        occurrenceID: occurrence.id,
-                        showsLoadingIndicator: false,
-                        previewReduceMotion: previewReduceMotion
-                    )
-                }
-            }
-            .frame(width: width, height: 112)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(
-                        isSelected ? StillsetStyle.accent : StillsetStyle.border.opacity(0.55),
-                        lineWidth: isSelected ? 2 : 0.5
-                    )
-            }
-            .padding(3)
-            .background {
-                if isSelected {
-                    RoundedRectangle(cornerRadius: 11, style: .continuous)
-                        .fill(StillsetStyle.accent.opacity(0.13))
-                }
-            }
-            .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: isSelected)
-
-            Text(occurrence.state.representativeTimestamp.stillsetTimecode)
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundStyle(StillsetStyle.muted)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-                .padding(.horizontal, 3)
-                .frame(height: 12)
-                .accessibilityHidden(true)
-        }
-        .frame(width: width + 6)
-    }
-}
-
-private struct TimelineEmptyState: View {
-    var body: some View {
-        Text("Les écrans détectés apparaîtront ici.")
-            .font(.caption)
-            .foregroundStyle(StillsetStyle.muted)
     }
 }
 
@@ -716,220 +376,24 @@ private struct StageProgressBar: View {
     }
 }
 
+#if DEBUG
 #Preview("Timeline · clair et sombre") {
-    OccurrenceTimelinePreview()
+    SessionResultsPreview()
 }
 
 #Preview("Timeline · mouvement réduit") {
-    OccurrenceTimelinePreview(previewReduceMotion: true)
+    SessionResultsPreview(previewReduceMotion: true)
 }
 
 #Preview("Timeline · paysage étroit") {
-    OccurrenceTimelinePreview(aspectRatio: 16.0 / 9.0, previewWidth: 320, previewReduceMotion: true)
+    SessionResultsPreview(aspectRatio: 16.0 / 9.0, previewWidth: 320, previewReduceMotion: true)
 }
 
 #Preview("Timeline · portrait étroit") {
-    OccurrenceTimelinePreview(previewWidth: 320)
+    SessionResultsPreview(previewWidth: 320)
 }
 
-#if DEBUG
-#Preview("Résultats · organisation en cours") {
-    ResultsRecognitionPreview(completed: false)
-}
-
-#Preview("Résultats · sélection conservée") {
-    ResultsRecognitionPreview(completed: true, focusesRepeat: false)
-}
-
-#Preview("Résultats · sélection remplacée") {
-    ResultsRecognitionPreview(completed: true, focusesRepeat: true)
-}
-
-#Preview("Résultats · par écran, fenêtre étroite") {
-    ResultsRecognitionPreview(completed: true, grouped: true, previewWidth: 820, previewHeight: 620,
-                              longSingleCapture: true)
-}
-
-#Preview("Résultats · par écran, mouvement réduit") {
-    ResultsRecognitionPreview(completed: true, grouped: true, previewWidth: 820, previewHeight: 620,
-                              longSingleCapture: true, previewReduceMotion: true)
-}
-
-#Preview("Résultats · barre d’outils native", arguments: [CGFloat(820), CGFloat(540), CGFloat(420)]) { width in
-    ResultsRecognitionPreview(completed: true, grouped: true, previewWidth: width, previewHeight: 620,
-                              longSingleCapture: true, usesRootView: true)
-}
-
-#Preview("Résultats · organisation stable, noms longs", arguments: [false, true]) { grouped in
-    ResultsRecognitionPreview(completed: true, grouped: grouped, previewWidth: 820, previewHeight: 620,
-                              longSingleCapture: true, usesRootView: true)
-}
-
-private struct ResultsRecognitionPreview: View {
-    @State private var model: AppModel
-    private let focusesRepeat: Bool
-    private let previewWidth: CGFloat
-    private let previewHeight: CGFloat
-    private let previewReduceMotion: Bool
-    private let usesRootView: Bool
-
-    private static let screens = (0..<24).map { index in
-        let timestamp = Double(index) * 3
-        return UIState(
-            id: UUID(uuidString: "00000000-0000-0000-0000-\(String(format: "%012d", index + 1))")!,
-            interval: timestamp..<(timestamp + 1),
-            representativeTimestamp: timestamp,
-            stabilityScore: 1
-        )
-    }
-    private static let captures = TimelinePreviewImages.captures(for: screens)
-    private static let classifications = Dictionary(uniqueKeysWithValues: screens.enumerated().map { index, screen in
-        let stateID = [1, 1, 2, 2, 3, 3, 4, 2][index % 8]
-        let names = ["Accueil", "Compte", "Réglages des notifications et des préférences de confidentialité du compte", "Confirmation"]
-        return (screen.id, ScreenClassification(screenID: stateID, name: names[stateID - 1], stateID: stateID))
-    })
-
-    init(completed: Bool, focusesRepeat: Bool = true, grouped: Bool = false, previewWidth: CGFloat = 1000,
-         previewHeight: CGFloat = 760, longSingleCapture: Bool = false, previewReduceMotion: Bool = false,
-         usesRootView: Bool = false) {
-        self.focusesRepeat = focusesRepeat
-        self.previewWidth = previewWidth
-        self.previewHeight = previewHeight
-        self.previewReduceMotion = previewReduceMotion
-        self.usesRootView = usesRootView
-        let suite = "Stillset-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let model = AppModel(preferences: AppPreferences(defaults: defaults))
-        model.videoURL = URL(fileURLWithPath: "/tmp/iphone-workflow.mp4")
-        model.screenshots = longSingleCapture ? [0, 2, 4, 6, 7].map { Self.captures[$0] } : Self.captures
-        model.detectedScreens = model.screenshots.map(\.state)
-        if completed {
-            model.screenClassifications = Self.classifications
-            model.setUniqueScreens(false)
-            model.setTimelineGrouping(grouped)
-        }
-        model.selectScreenshot(Self.captures[longSingleCapture ? 4 : (focusesRepeat ? Self.captures.count - 1 : 4)].id,
-                               modifiers: [])
-        model.setPreviewAnalysisRunning(!completed)
-        _model = State(initialValue: model)
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            if !usesRootView {
-                HStack {
-                    Button(model.isAnalyzing ? "Terminer l’organisation" : "Recommencer l’organisation") {
-                        if model.isAnalyzing {
-                            model.screenClassifications = Self.classifications
-                            model.setUniqueScreens(model.showsUniqueScreens)
-                            model.setPreviewAnalysisRunning(false)
-                        } else {
-                            model.screenClassifications = [:]
-                            if let capture = focusesRepeat ? model.screenshots.last : model.screenshots.first {
-                                model.selectScreenshot(capture.id, modifiers: [])
-                            }
-                            model.setPreviewAnalysisRunning(true)
-                        }
-                    }
-                    Spacer()
-                }
-                .padding(16)
-            }
-            if usesRootView {
-                StillsetRootView(model: model)
-            } else {
-                ResultsView(model: model, previewReduceMotion: previewReduceMotion)
-            }
-        }
-        .frame(width: previewWidth, height: previewHeight)
-        .background(StillsetStyle.surface)
-    }
-}
 #endif
-
-private struct OccurrenceTimelinePreview: View {
-    var aspectRatio: CGFloat = 9.0 / 19.0
-    var previewWidth: CGFloat = 540
-    var previewReduceMotion = false
-
-    private static let sparse = [0, 0.16, 0.5, 0.78, 1].map { timestamp in
-        UIState(interval: timestamp..<(timestamp + 0.04), representativeTimestamp: timestamp, stabilityScore: 1)
-    }
-    private static let dense = (0..<24).map { index in
-        let timestamp = 0.4 + Double(index) * 0.007
-        return UIState(interval: timestamp..<(timestamp + 0.004), representativeTimestamp: timestamp, stabilityScore: 1)
-    }
-    private static let portraitSparseCaptures = TimelinePreviewImages.captures(for: sparse)
-    private static let portraitDenseCaptures = TimelinePreviewImages.captures(for: dense)
-    private static let landscapeSparseCaptures = TimelinePreviewImages.captures(for: sparse, aspectRatio: 16.0 / 9.0)
-    private static let landscapeDenseCaptures = TimelinePreviewImages.captures(for: dense, aspectRatio: 16.0 / 9.0)
-
-    private var sparseCaptures: [CapturedScreenshot] {
-        aspectRatio > 1 ? Self.landscapeSparseCaptures : Self.portraitSparseCaptures
-    }
-
-    private var denseCaptures: [CapturedScreenshot] {
-        aspectRatio > 1 ? Self.landscapeDenseCaptures : Self.portraitDenseCaptures
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            ForEach([ColorScheme.light, .dark], id: \.self) { scheme in
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Recherche d’écrans…")
-                    strip(screens: [], captures: [])
-                    StageProgressBar(fraction: 0, previewReduceMotion: previewReduceMotion)
-                    Text("Recherche · écrans détectés")
-                    strip(screens: Self.sparse, captures: [])
-                    StageProgressBar(fraction: 0.63, previewReduceMotion: previewReduceMotion)
-                    Text("Captures · ordre indépendant")
-                    strip(screens: Self.sparse, captures: [sparseCaptures[3], sparseCaptures[0]])
-                    StageProgressBar(fraction: 0.4, previewReduceMotion: previewReduceMotion)
-                    Text("Repérage · captures prêtes")
-                    strip(screens: Self.sparse, captures: sparseCaptures)
-                    StageProgressBar(fraction: 0.35, previewReduceMotion: previewReduceMotion)
-                    Text("Captures · écrans rapprochés")
-                    strip(
-                        screens: Self.dense,
-                        captures: denseCaptures.enumerated().filter { $0.offset.isMultiple(of: 2) }.map(\.element)
-                    )
-                    StageProgressBar(fraction: 0.5, previewReduceMotion: previewReduceMotion)
-                }
-                .font(.caption)
-                .foregroundStyle(StillsetStyle.muted)
-                .padding(20)
-                .background(StillsetStyle.surface)
-                .environment(\.colorScheme, scheme)
-            }
-        }
-        .frame(width: previewWidth)
-    }
-
-    private func strip(screens: [UIState], captures: [CapturedScreenshot]) -> some View {
-        let occurrences = TimelineOccurrence.analyzing(screens: screens, screenshots: captures)
-        return ScrollView(.horizontal) {
-            LazyHStack(spacing: 12) {
-                ForEach(Array(occurrences.enumerated()), id: \.element.id) { index, occurrence in
-                    TimelineOccurrenceCell(
-                        occurrence: occurrence,
-                        index: index,
-                        width: min(160, max(48, 112 * aspectRatio)),
-                        isSelected: occurrence.id == captures.first?.id,
-                        previewReduceMotion: previewReduceMotion
-                    )
-                    .id(occurrence.id)
-                }
-            }
-            .padding(3)
-        }
-        .overlay {
-            if occurrences.isEmpty { TimelineEmptyState() }
-        }
-        .scrollIndicators(.never)
-        .frame(height: 158)
-    }
-}
 
 private enum TimelinePreviewImages {
     private static let directory = FileManager.default.temporaryDirectory
@@ -1050,3 +514,56 @@ extension TimeInterval {
         )
     }
 }
+
+#if DEBUG
+private struct SessionResultsPreview: View {
+    @State private var session: SessionModel
+    var aspectRatio: CGFloat = 9 / 19
+    var previewWidth: CGFloat = 1000
+    var previewReduceMotion = false
+
+    init(aspectRatio: CGFloat = 9 / 19, previewWidth: CGFloat = 1000, previewReduceMotion: Bool = false,
+         failed: Bool = false, grouped: Bool = false) {
+        self.aspectRatio = aspectRatio
+        self.previewWidth = previewWidth
+        self.previewReduceMotion = previewReduceMotion
+        let jobs = (0..<3).map { index in
+            let job = AppModel()
+            job.videoURL = URL(fileURLWithPath: "/tmp/\(index == 0 ? "portrait" : "landscape")-\(index).mov")
+            let states = (0..<4).map { time in
+                UIState(id: UUID(uuidString: "00000000-0000-0000-0000-\(String(format: "%012d", time + 1))")!,
+                    interval: Double(time)..<Double(time + 1), representativeTimestamp: Double(time), stabilityScore: 1)
+            }
+            job.detectedScreens = states
+            job.screenshots = TimelinePreviewImages.captures(for: Array(states.prefix(index == 2 ? 1 : 4)),
+                aspectRatio: index == 0 ? aspectRatio : 16 / 9)
+            job.screenClassifications = Dictionary(uniqueKeysWithValues: job.screenshots.enumerated().map { offset, capture in
+                (capture.id, ScreenClassification(screenID: 1, name: "Compte", stateID: offset + 1))
+            })
+            if index == 2 {
+                if failed { job.admit(job.videoURL!, failure: "Impossible de terminer l’analyse. Les PNG prêts sont conservés.") }
+                else { job.setPreviewAnalysisRunning(true) }
+            }
+            return job
+        }
+        let preferences = AppPreferences(defaults: UserDefaults(suiteName: "StillsetPreview-\(UUID())")!)
+        let session = SessionModel(preferences: preferences, imports: VideoImportQueue(models: jobs))
+        session.setUniqueScreens(false)
+        session.setTimelineGrouping(grouped)
+        session.selectScreenshot(session.screenshots[1].id, modifiers: [])
+        session.selectScreenshot(session.screenshots[5].id, modifiers: .command)
+        _session = State(initialValue: session)
+    }
+
+    var body: some View {
+        ResultsView(model: session, cancelSingleVideo: {}, previewReduceMotion: previewReduceMotion)
+            .frame(width: previewWidth, height: 720)
+            .background(StillsetStyle.background)
+    }
+}
+
+#Preview("Session · analyses et sources mixtes") { SessionResultsPreview() }
+#Preview("Session · échec avec PNG partiels") { SessionResultsPreview(failed: true) }
+#Preview("Session · mêmes noms, groupes séparés") { SessionResultsPreview(grouped: true) }
+#Preview("Session · mouvement réduit") { SessionResultsPreview(previewReduceMotion: true) }
+#endif

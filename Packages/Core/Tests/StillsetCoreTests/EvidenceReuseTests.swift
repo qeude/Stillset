@@ -34,7 +34,7 @@ struct EvidenceReuseTests {
         ]
         let local = try await analyzer.analyze(fileURLs: files, useFoundationModels: false, preparedRecognition: prepared)
         #expect(local.classifications == expected && local.recognitionFailures == 0)
-        let aliases = try ScreenshotExporter.prepareNamedFiles(files: files, screenNames: Array(repeating: "Alias", count: 4))
+        let aliases = try await ScreenshotExporter.prepareNamedFiles(files: files, screenNames: Array(repeating: "Alias", count: 4))
         for mode in [true, false] {
             let result = try await analyzer.analyze(fileURLs: aliases, useFoundationModels: mode)
             #expect(result.classifications == expected && result.errorDescription == nil)

@@ -1,0 +1,250 @@
+{
+  "duration" : 3.1000000000000001,
+  "frames" : [
+    {
+      "height" : "192",
+      "luma" : "9ffeb89122f2207562ca1f04765d4071f5a5d4579fab43fb829fcad2f02a019d",
+      "time" : "0.0",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "af213b1be92b938f6e3306eaea57f38dcfd2a7b423403f977fbf8d184a59daca",
+      "time" : "0.1",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "e0e36f170ac29dfe8c6e9a3c467deecb10d02afa6ce745cf14959e75004446df",
+      "time" : "0.2",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "c8d8faea93a75ddbdf46f9d5efcd77f8a62e6f619db403a434011b5af2f8dd1d",
+      "time" : "0.3",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "0e5f9a6ae10ffcac2b3c10a9efc652bcbee73317d17a237d5f04452224339028",
+      "time" : "0.4",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "218b0867fd2310c2615f30019173e64769550fde7418b25f9ef5ff2d25844fd9",
+      "time" : "0.5",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "faa189c5a8d6a4f24a5e1723280a70cda6d449bee93e3368cb1608796293b3f0",
+      "time" : "0.6",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "bf54285094dc2f9854868847afc647bc7779ca44b47b5fb332922893c01da4b6",
+      "time" : "0.7",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "b608d8b674142bf4c638ae02ad91c3038424f65780d32b218dd980a8bbee9af0",
+      "time" : "0.8",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "0e252152e364b01efa3cb52d09e18111edae366c327dcbdf08a4182c78b0ce26",
+      "time" : "0.9",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "c44647ac7381abf7665c3ae29284815eae92092ec9cae11b925c8f6ede7e7325",
+      "time" : "1.0",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "6685dab95c549efe40cf8e510fb70059609c7a68d07de71da66d07be949b1889",
+      "time" : "1.1",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "5c0d2eb62641579a4f6d307361d2d699818a58ebbb9ad21f4ff03487271753e3",
+      "time" : "1.2",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "2805bf1659c54525b4f62ec2fbdaca78a580d9da37b00c849d887ea3d4c401b4",
+      "time" : "1.3",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "5eb3ae736ffd7e336391524ca2c548798c067b6791ab3c47475a2692900d89b3",
+      "time" : "1.4",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "ac2e7fcd260b46ffa7c9668896a45d457653db87275d4f5ca5348fcfe21e18a0",
+      "time" : "1.5",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "6dc180ff78a25c33550edab55ca94cb6ace1c38b05faef1eeee2423cde79d646",
+      "time" : "1.6",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "48f6d627d751bfa330db1de1afa010dc49a5a305f3631237a1e22f196c523112",
+      "time" : "1.7",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "16bbb3380eecc305fdbb7c6b0c2c51ee2b16640eda2b86e4f0d5e44d2a8baad6",
+      "time" : "1.8",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "2f5c960546b726676f6156d673096ebb9dfbd5e4a8742884428ac11e1c355df1",
+      "time" : "1.9",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "61ac5483642e5dbdb76d9e7c66221ef062c727fb666744e45b753510bef79394",
+      "time" : "2.0",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "95e68ea6952abf15ed87008ea68329d0668e4adf07111189ca349b9edd824b03",
+      "time" : "2.1",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "7ff4f39f6fff6a0ba0f5e321b20c77a124aae85fe7928d6bd5a2db7d67a2e8a8",
+      "time" : "2.2",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "8552faedc89335c509344ad20cc96f624c774db91107e41be9b6739a7b944528",
+      "time" : "2.3",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "af2084c0118ab77c269fa2b1b6e2a07bf6f63b2578a016dd12b1c8cf90f211ca",
+      "time" : "2.4",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "ec51a417ed50ca65e076430cf3e028b8437844ec2af0a62cd2c9717285ec276b",
+      "time" : "2.5",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "ff1e6713a3331969ccf1cff985a59b3d7e90381c1bff3b5e9e4a4782978cc65e",
+      "time" : "2.6",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "329eff2ffd65669ae6b97e28c7c79cc2c54055194f5f1354f58ea733e30c3781",
+      "time" : "2.7",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "76c93836397eba2db5ed678d69c69e6af5039754baefc571a55aaafd50a42ff9",
+      "time" : "2.8",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "a11620c4a1246f0e0883a53fceed32b3c04da4ae3372c1f7699f691eafb91b40",
+      "time" : "2.9",
+      "width" : "128"
+    },
+    {
+      "height" : "192",
+      "luma" : "5aeae2dcff61695bd9918d54b0c87c70aa29afd7d44ea8080c595064de68b1cd",
+      "time" : "3.0",
+      "width" : "128"
+    }
+  ],
+  "pngs" : [
+    {
+      "height" : 192,
+      "pixels" : "eedd135682d0bafc8f3f492ff898bcd06aadf86842d31472be14b8c124c750e5",
+      "width" : 128
+    },
+    {
+      "height" : 192,
+      "pixels" : "654af0dd918f6bb6a42decfa6960ad6bce73ffb34e944b9c7b8a71d1de4c01ea",
+      "width" : 128
+    },
+    {
+      "height" : 192,
+      "pixels" : "b53dd6438b62f4768821b816c065c5921241d9ca371cfdaf0f6c2afe8f4d5040",
+      "width" : 128
+    },
+    {
+      "height" : 192,
+      "pixels" : "513bc22c9dce55038255c96113af4906771132c03817f943784e05c3f02c2c36",
+      "width" : 128
+    },
+    {
+      "height" : 192,
+      "pixels" : "34ee9a8cb5db12ba3764e7673fb08a9b8f23a3171feb868575e3b8d21c416a8d",
+      "width" : 128
+    }
+  ],
+  "states" : [
+    {
+      "end" : 0.40000000000000002,
+      "score" : 0.99997431039810181,
+      "start" : 0,
+      "timestamp" : 0.29999999999999999
+    },
+    {
+      "end" : 1.2,
+      "score" : 0.99998193979263306,
+      "start" : 0.80000000000000004,
+      "timestamp" : 1
+    },
+    {
+      "end" : 2,
+      "score" : 0.99999600648880005,
+      "start" : 1.6000000000000001,
+      "timestamp" : 2
+    },
+    {
+      "end" : 2.5,
+      "score" : 0.99998980760574341,
+      "start" : 2.2000000000000002,
+      "timestamp" : 2.2999999999999998
+    },
+    {
+      "end" : 3,
+      "score" : 0.99999922513961792,
+      "start" : 2.7000000000000002,
+      "timestamp" : 3
+    }
+  ]
+}

@@ -3,21 +3,24 @@ import Foundation
 public enum AnalysisPipeline {
     public static func run(
         url: URL,
-        onProgress: @Sendable (AnalysisProgress) -> Void,
-        onAnalyzedFrames: @Sendable ([Frame]) async -> Void = { _ in },
-        onPrepared: @Sendable (TimeInterval) async -> Void = { _ in },
+        work: ProcessingLane = .standalone(),
+        previewRequest: @escaping @Sendable () -> PreviewRequest? = { PreviewRequest() },
+        onProgress: @Sendable (AnalysisProgress) async throws -> Void,
+        onAnalyzedFrames: @Sendable ([Frame]) async throws -> Void = { _ in },
+        onPrepared: @Sendable (TimeInterval) async throws -> Void = { _ in },
         onDetectedScreens: @Sendable ([UIState]) async throws -> Void = { _ in }
     ) async throws -> AnalysisResult {
         let accumulator = CandidateAccumulator()
-        let duration = try await VideoDecoder.decode(url: url, onFrames: { frames in
-            let detected = await accumulator.consume(frames)
+        let duration = try await VideoDecoder.decode(url: url, work: work, previewRequest: previewRequest, onFrames: { frames in
+            let detected = try await work.perform { await accumulator.consume(frames) }
             if !detected.isEmpty { try await onDetectedScreens(detected) }
-            await onAnalyzedFrames(frames)
+            try await onAnalyzedFrames(frames)
         }, onProgress: onProgress, onPrepared: onPrepared)
-        let (states, finalState) = await accumulator.finish()
+        let (states, finalState) = try await work.perform { await accumulator.finish() }
         if let finalState { try await onDetectedScreens([finalState]) }
         guard !states.isEmpty else { throw VideoAnalysisError.noStableStates }
-        onProgress(AnalysisProgress(stage: .complete, fraction: 1, detail: "\(states.count.formatted()) screenshots ready"))
+        try await onProgress(AnalysisProgress(stage: .complete, fraction: 1, detail: "\(states.count.formatted()) screenshots ready"))
+        try Task.checkCancellation()
         return AnalysisResult(sourceURL: url, duration: duration, states: states)
     }
 }

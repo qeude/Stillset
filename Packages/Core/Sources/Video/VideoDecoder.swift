@@ -24,21 +24,49 @@ public struct AnalysisProgress: Sendable {
 }
 
 public enum VideoDecoder {
-    private static let frameBatchSize = 8
-    private static let proxyConcurrencyLimit = min(4, max(1, ProcessInfo.processInfo.activeProcessorCount / 2))
-
     public static func decode(
         url: URL,
+        work: ProcessingLane = .standalone(),
+        previewRequest: @escaping @Sendable () -> PreviewRequest? = { PreviewRequest() },
         onFrames: @Sendable ([Frame]) async throws -> Void,
-        onProgress: @Sendable (AnalysisProgress) -> Void,
-        onPrepared: @Sendable (TimeInterval) async -> Void = { _ in }
+        onProgress: @Sendable (AnalysisProgress) async throws -> Void,
+        onPrepared: @Sendable (TimeInterval) async throws -> Void = { _ in }
     ) async throws -> TimeInterval {
+        let source = try await work.perform { VideoFrameSource() }
+        let duration = try await work.perform { try await source.prepare(url) }
+        try await onPrepared(duration)
+        var frameCount = 0
+        var lastProgressTime: TimeInterval = -.infinity
+        while let frames = try await work.perform({ try await source.next(previewRequest: previewRequest) }) {
+            try Task.checkCancellation()
+            try await onFrames(frames)
+            frameCount += frames.count
+            if let timestamp = frames.last?.timestamp, timestamp - lastProgressTime >= 0.25 {
+                let fraction = duration > 0 ? min(0.99, max(0, timestamp / duration)) : 0
+                try await onProgress(AnalysisProgress(stage: .decoding, fraction: fraction,
+                    detail: "\(frameCount.formatted()) frames analyzed"))
+                lastProgressTime = timestamp
+            }
+        }
+        guard frameCount > 0 else { throw VideoAnalysisError.noVideoFrames }
+        return duration
+    }
+}
+
+private actor VideoFrameSource {
+    private var reader: AVAssetReader?
+    private var output: AVAssetReaderTrackOutput?
+    private var transform = CGAffineTransform.identity
+    private let generator = FrameProxyGenerator()
+    private var lastColor: ContinuousClock.Instant?
+
+    func prepare(_ url: URL) async throws -> TimeInterval {
         let asset = AVURLAsset(url: url)
         let duration = try await asset.load(.duration).seconds
-        let tracks = try await asset.loadTracks(withMediaType: .video)
-        guard let track = tracks.first else { throw VideoAnalysisError.noVideoTrack }
-
-        let preferredTransform = try await track.load(.preferredTransform)
+        guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+            throw VideoAnalysisError.noVideoTrack
+        }
+        transform = try await track.load(.preferredTransform)
         let reader = try AVAssetReader(asset: asset)
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
             kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
@@ -47,49 +75,32 @@ public enum VideoDecoder {
         guard reader.canAdd(output) else { throw VideoAnalysisError.cannotReadVideo }
         reader.add(output)
         guard reader.startReading() else { throw reader.error ?? VideoAnalysisError.cannotReadVideo }
-        await onPrepared(duration.isFinite ? max(0, duration) : 0)
+        self.reader = reader
+        self.output = output
+        return duration.isFinite ? max(0, duration) : 0
+    }
 
-        let proxyGenerator = FrameProxyGenerator()
-        var frameCount = 0
-        var sampleBatch: [VideoSample] = []
-        sampleBatch.reserveCapacity(frameBatchSize)
-        var lastProgressTime: TimeInterval = -.infinity
-
-        while let sample = output.copyNextSampleBuffer() {
+    func next(previewRequest: @Sendable () -> PreviewRequest?) throws -> [Frame]? {
+        guard let reader, let output else { throw VideoAnalysisError.cannotReadVideo }
+        var samples: [VideoSample] = []
+        while samples.count < 8, let sample = output.copyNextSampleBuffer() {
             try Task.checkCancellation()
-            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sample) else { continue }
+            guard let pixels = CMSampleBufferGetImageBuffer(sample) else { continue }
             let timestamp = CMSampleBufferGetPresentationTimeStamp(sample).seconds
             guard timestamp.isFinite else { continue }
-            let image = CIImage(cvPixelBuffer: pixelBuffer).transformed(by: preferredTransform)
-            sampleBatch.append(VideoSample(timestamp: timestamp, image: image))
-            if sampleBatch.count == frameBatchSize {
-                let frames = try await proxyGenerator.makeFrames(from: sampleBatch, maxConcurrent: proxyConcurrencyLimit)
-                try await onFrames(frames)
-                frameCount += frames.count
-                sampleBatch.removeAll(keepingCapacity: true)
-                if timestamp - lastProgressTime >= 0.25 {
-                    let fraction = duration > 0 ? min(0.99, max(0, timestamp / duration)) : 0
-                    onProgress(AnalysisProgress(stage: .decoding, fraction: fraction, detail: "\(frameCount.formatted()) frames analyzed"))
-                    lastProgressTime = timestamp
-                }
+            samples.append(VideoSample(timestamp: timestamp,
+                image: CIImage(cvPixelBuffer: pixels).transformed(by: transform)))
+        }
+        if samples.isEmpty {
+            guard reader.status == .completed else {
+                try Task.checkCancellation()
+                throw reader.error ?? VideoAnalysisError.cannotReadVideo
             }
+            return nil
         }
-
-        guard reader.status == .completed else {
-            if Task.isCancelled { throw CancellationError() }
-            throw reader.error ?? VideoAnalysisError.cannotReadVideo
-        }
-        if !sampleBatch.isEmpty {
-            let frames = try await proxyGenerator.makeFrames(from: sampleBatch, maxConcurrent: proxyConcurrencyLimit)
-            try await onFrames(frames)
-            frameCount += frames.count
-            if let lastSample = sampleBatch.last, lastSample.timestamp - lastProgressTime >= 0.25 {
-                let fraction = duration > 0 ? min(0.99, max(0, lastSample.timestamp / duration)) : 0
-                onProgress(AnalysisProgress(stage: .decoding, fraction: fraction, detail: "\(frameCount.formatted()) frames analyzed"))
-            }
-        }
-        guard frameCount > 0 else { throw VideoAnalysisError.noVideoFrames }
-        return duration.isFinite ? duration : 0
+        let frames = try generator.makeFrames(from: samples, previewRequest: previewRequest, lastColor: lastColor)
+        if frames.contains(where: { $0.previewRGBA != nil }) { lastColor = .now }
+        return frames
     }
 }
 
@@ -103,55 +114,22 @@ private struct FrameProxyGenerator {
     private let grayColorSpace = CGColorSpaceCreateDeviceGray()
     private let rgbColorSpace = CGColorSpaceCreateDeviceRGB()
 
-    func makeFrames(from samples: [VideoSample], maxConcurrent: Int) async throws -> [Frame] {
-        guard !samples.isEmpty else { return [] }
-        return try await withThrowingTaskGroup(of: (Int, Frame?).self) { group in
-            var nextIndex = 0
-            for _ in 0..<min(maxConcurrent, samples.count) {
-                let sample = samples[nextIndex]
-                let taskIndex = nextIndex
-                group.addTask {
-                    try Task.checkCancellation()
-                    let frame = makeFrame(image: sample.image, timestamp: sample.timestamp)
-                    try Task.checkCancellation()
-                    return (taskIndex, frame)
-                }
-                nextIndex += 1
-            }
-
-            var orderedFrames = [Frame?](repeating: nil, count: samples.count)
-            while let (index, frame) = try await group.next() {
-                try Task.checkCancellation()
-                orderedFrames[index] = frame
-                if nextIndex < samples.count {
-                    let sample = samples[nextIndex]
-                    let taskIndex = nextIndex
-                    group.addTask {
-                        try Task.checkCancellation()
-                        let frame = makeFrame(image: sample.image, timestamp: sample.timestamp)
-                        try Task.checkCancellation()
-                        return (taskIndex, frame)
-                    }
-                    nextIndex += 1
-                }
-            }
-            var frames = orderedFrames.compactMap { $0 }
-            if let lastFrame = frames.indices.last,
-               let sample = samples.last,
-               let preview = makeColorPreview(image: sample.image) {
-                let frame = frames[lastFrame]
-                frames[lastFrame] = Frame(
-                    timestamp: frame.timestamp,
-                    width: frame.width,
-                    height: frame.height,
-                    luma: frame.luma,
-                    previewWidth: preview.width,
-                    previewHeight: preview.height,
-                    previewRGBA: preview.pixels
-                )
-            }
-            return frames
+    func makeFrames(from samples: [VideoSample], previewRequest: @Sendable () -> PreviewRequest?,
+                    lastColor: ContinuousClock.Instant?) throws -> [Frame] {
+        var frames: [Frame] = []
+        for sample in samples {
+            try Task.checkCancellation()
+            if let frame = makeFrame(image: sample.image, timestamp: sample.timestamp) { frames.append(frame) }
         }
+        let eligible = lastColor.map { $0.duration(to: .now) >= .milliseconds(125) } ?? true
+        if eligible, let request = previewRequest(), let index = frames.indices.last, let sample = samples.last,
+           let preview = makeColorPreview(image: sample.image, maximumPixelSize: request.maximumPixelSize) {
+            let frame = frames[index]
+            frames[index] = Frame(timestamp: frame.timestamp, width: frame.width, height: frame.height,
+                luma: frame.luma, sourceAspectRatio: frame.sourceAspectRatio,
+                previewWidth: preview.width, previewHeight: preview.height, previewRGBA: preview.pixels)
+        }
+        return frames
     }
 
     func makeFrame(image: CIImage, timestamp: TimeInterval) -> Frame? {
@@ -175,13 +153,13 @@ private struct FrameProxyGenerator {
                 colorSpace: grayColorSpace
             )
         }
-        return Frame(timestamp: timestamp, width: width, height: height, luma: luma)
+        return Frame(timestamp: timestamp, width: width, height: height, luma: luma, sourceAspectRatio: Double(bounds.width / bounds.height))
     }
 
-    private func makeColorPreview(image: CIImage) -> (width: Int, height: Int, pixels: Data)? {
+    private func makeColorPreview(image: CIImage, maximumPixelSize: Int) -> (width: Int, height: Int, pixels: Data)? {
         let bounds = image.extent.integral
         guard bounds.width > 0, bounds.height > 0 else { return nil }
-        let scale: CGFloat = 1
+        let scale = min(1, CGFloat(maximumPixelSize) / max(bounds.width, bounds.height))
         let width = max(1, Int((bounds.width * scale).rounded()))
         let height = max(1, Int((bounds.height * scale).rounded()))
         let translated = image.transformed(by: CGAffineTransform(translationX: -bounds.minX, y: -bounds.minY))
