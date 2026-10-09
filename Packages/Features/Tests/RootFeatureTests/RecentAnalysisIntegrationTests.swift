@@ -86,6 +86,7 @@ struct RecentAnalysisIntegrationTests {
         #expect(!fresh.occurrences.isEmpty)
         model.reanalyze()
         model.cancel()
+        await model.waitForAnalysis()
         #expect(!model.isWorking && !model.isAnalyzing)
         let retained = try #require(try await cache.load(for: source))
         #expect(retained.occurrences.map(\.state.id) == fresh.occurrences.map(\.state.id))
@@ -184,9 +185,10 @@ struct RecentAnalysisIntegrationTests {
         try await waitUntil { await gate.isWaiting }
         model.cancelRefinement()
         model.importVideo(video)
+        #expect(model.isWorking)
+        await gate.release()
         try await waitForAnalysis(model)
         #expect(model.screenshots.map(\.id) == seeded.occurrences.map(\.state.id))
-        await gate.release()
         try await waitUntil { await gate.finished }
         for _ in 0..<5 { await Task.yield() }
         #expect(model.refinementDetail == nil)
@@ -233,9 +235,11 @@ struct RecentAnalysisIntegrationTests {
         #expect(model.screenshots.count == 5)
         let abandonedFiles = model.screenshots.map(\.fileURL)
         model.cancel()
+        #expect(model.isWorking)
+        await gate.release()
+        try await waitForAnalysis(model)
         model.importVideo(video)
         try await waitForAnalysis(model)
-        await gate.release()
         try await waitUntil { await gate.finished }
         for _ in 0..<5 { await Task.yield() }
         #expect(!model.isWorking && model.errorMessage == nil)
