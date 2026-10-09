@@ -276,6 +276,32 @@ struct RecentAnalysisIntegrationTests {
         #expect(retained.catalog.classifications == seeded.catalog.classifications)
     }
 
+    @Test func sessionRefinementPersistsPerVideoMetadataForCachedReimport() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let video = try fixtureURL()
+        let cache = RecentAnalysisCache(directory: root.appendingPathComponent("cache"))
+        let source = try #require(try await cache.fingerprint(for: video))
+        try await cache.store(snapshot(video), for: source)
+        let job = makeModel(cache)
+        job.importVideo(video)
+        try await waitForAnalysis(job)
+        let preferences = AppPreferences(defaults: UserDefaults(suiteName: "SessionCache-\(UUID())")!)
+        let session = SessionModel(preferences: preferences, imports: VideoImportQueue(models: [job]), catalogRunner: { urls, refined, _ in
+            SessionCatalogResult(classifications: urls.enumerated().map { index, _ in
+                ScreenClassification(screenID: 7, name: refined ? "Profil" : "Accueil", stateID: index == 2 ? 1 : index + 1)
+            })
+        })
+        await session.waitForCatalog()
+        session.refineScreens()
+        await session.waitForCatalog()
+        #expect(session.screenshots.allSatisfy { $0.classification?.name == "Profil" })
+        let saved = try #require(try await cache.load(for: source))
+        #expect(saved.occurrences.map(\.classification.name) == ["Profil", "Profil", "Profil"])
+        #expect(saved.occurrences.map(\.classification.stateID) == [1, 2, 1])
+        await session.finishSession()
+    }
+
     @Test func normalQuitCleanupIsIdempotentAndKeepsMetadata() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }

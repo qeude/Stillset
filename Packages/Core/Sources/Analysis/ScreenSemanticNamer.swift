@@ -61,11 +61,10 @@ enum ScreenSemanticNamer {
     }
 
     static func classify(
-        fileURLs: [URL], sources: [Int], cachedNames: [Int: ScreenNameResult] = [:],
+        fileURLs: [URL], sources: [Int], work: ProcessingLane = .standalone(), cachedNames: [Int: ScreenNameResult] = [:],
         recognition: [Int: ScreenVisionFallback.Recognition] = [:],
-        preparedSessions: [LanguageModelSession] = [],
         useFoundationModels: Bool = true,
-        onProgress: @Sendable (Double, String) async -> Void
+        onProgress: @Sendable (Double, String) async throws -> Void
     ) async throws -> [ScreenNameResult] {
         try Task.checkCancellation()
         let representatives = fileURLs.indices.filter { sources[$0] == $0 }
@@ -82,23 +81,24 @@ enum ScreenSemanticNamer {
             }
         }
         let pending = representatives.filter { results[$0] == nil }
-        // Freeze journey context before inference so completion order cannot change prompts.
-        let contexts = Dictionary(uniqueKeysWithValues: pending.map { index in
-            let known = representatives.prefix { $0 < index }.compactMap { previous in
-                results[previous]?.name ?? recognition[previous]?.title
-            }
-            return (index, String(known.suffix(12).joined(separator: "\n").prefix(800)))
-        })
+        let preparedNames = results
+        let chronologicalContexts = try await work.perform {
+            Dictionary(uniqueKeysWithValues: pending.map { index in
+                let known = representatives.prefix { $0 < index }.compactMap { previous in
+                    preparedNames[previous]?.name ?? recognition[previous]?.title
+                }
+                return (index, String(known.suffix(12).joined(separator: "\n").prefix(800)))
+            })
+        }
         let initialCount = results.count
-        let named = try await ScreenCatalogAnalyzer.concurrentMap(Array(pending.enumerated()), operation: { item in
-            let (offset, index) = item
-            let session = preparedSessions.indices.contains(offset) ? preparedSessions[offset] : makeSession()
-            session.prewarm()
+        let named = try await ScreenCatalogAnalyzer.orderedMap(Array(pending.enumerated()), work: work, operation: { item in
+            let (_, index) = item
+            let session = makeSession()
             let result = try await nameWithFallback(fileURLs[index], recognizedTitle: recognition[index].map { .known($0.title) } ?? .missing) {
                 guard isAvailable else { throw CocoaError(.featureUnsupported) }
                 let image = try ScreenCatalogAnalyzer.proxyImage(fileURLs[index])
                 let response = try await session.respond(to: Prompt {
-                    "Previous screens in chronological order: \(contexts[index, default: ""])"
+                    "Previous screens in chronological order: \(chronologicalContexts[index, default: ""])"
                     "CURRENT SCREEN:"
                     Attachment(image)
                 }, generating: SemanticScreen.self,
@@ -112,11 +112,12 @@ enum ScreenSemanticNamer {
             }
             return (index, result)
         }) { completed in
-            await onProgress(Double(initialCount + completed) / Double(representatives.count),
+            try await onProgress(Double(initialCount + completed) / Double(representatives.count),
                              "Compréhension du parcours : \(initialCount + completed) sur \(representatives.count) écrans")
         }
         for (index, result) in named { results[index] = result }
-        await onProgress(1, "Noms des écrans prêts")
+        try await onProgress(1, "Noms des écrans prêts")
+        try Task.checkCancellation()
         return try sources.map { source in
             guard let result = results[source] else { throw CocoaError(.coderInvalidValue) }
             return result

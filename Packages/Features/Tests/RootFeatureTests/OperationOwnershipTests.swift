@@ -42,7 +42,7 @@ struct OperationOwnershipTests {
         }
         model.copyFiles = { plan, destination, progress in
             try await copying.block()
-            return try ScreenshotExporter.copy(plan: plan, to: destination, onProgress: progress)
+            return try await ScreenshotExporter.copy(plan: plan, to: destination, onProgress: progress)
         }
         model.saveSelection()
         await copying.waitUntilEntered()
@@ -92,7 +92,7 @@ struct OperationOwnershipTests {
         model.chooseSaveFolder = { _ in folder }
         model.copyFiles = { plan, destination, progress in
             try await copying.block()
-            return try ScreenshotExporter.copy(plan: plan, to: destination, onProgress: progress)
+            return try await ScreenshotExporter.copy(plan: plan, to: destination, onProgress: progress)
         }
         model.saveSelection()
         await copying.waitUntilEntered()

@@ -33,6 +33,42 @@ public struct ScreenCatalog: Sendable {
     }
 }
 
+actor ScreenRecognitionCache {
+    static let shared = ScreenRecognitionCache()
+    private let maximumEntries = 128
+    private let maximumBytes = 16 * 1024 * 1024
+    private var values: [SHA256.Digest: ScreenVisionFallback.Recognition] = [:]
+    private var order: [SHA256.Digest] = []
+    private var byteCount = 0
+
+    func values(for digests: [SHA256.Digest]) -> [SHA256.Digest: ScreenVisionFallback.Recognition] {
+        Dictionary(uniqueKeysWithValues: Set(digests).compactMap { digest in
+            values[digest].map { (digest, $0) }
+        })
+    }
+
+    func insert(_ recognition: ScreenVisionFallback.Recognition, for digest: SHA256.Digest) {
+        guard values[digest] == nil else { return }
+        let size = Self.estimatedSize(recognition)
+        guard size <= maximumBytes else { return }
+        while order.count >= maximumEntries || byteCount + size > maximumBytes {
+            let removed = order.removeFirst()
+            if let value = values.removeValue(forKey: removed) {
+                byteCount -= Self.estimatedSize(value)
+            }
+        }
+        order.append(digest)
+        values[digest] = recognition
+        byteCount += size
+    }
+
+    private static func estimatedSize(_ recognition: ScreenVisionFallback.Recognition) -> Int {
+        recognition.pixels.count + (recognition.title?.utf8.count ?? 0)
+            + (recognition.pickerName?.utf8.count ?? 0)
+            + recognition.lines.reduce(0) { $0 + $1.rowPixels.count + $1.text.utf8.count + 128 }
+    }
+}
+
 /// Screen identity is metadata: every input keeps its occurrence and original PNG.
 public actor ScreenCatalogAnalyzer {
     private var previousDigests: [SHA256.Digest] = []
@@ -42,6 +78,8 @@ public actor ScreenCatalogAnalyzer {
     private var previousSources: [Int] = []
     private var previousNames: [Int: ScreenNameResult] = [:]
     private var comparisons: [Set<SHA256.Digest>: Bool] = [:]
+    private let recognitionOperation: (@Sendable (URL) async throws -> ScreenVisionFallback.Recognition)?
+    private let recognitionCache: ScreenRecognitionCache
     private var completeEvidence: [SHA256.Digest: Evidence] = [:]
 
     struct Evidence: Sendable {
@@ -92,7 +130,7 @@ public actor ScreenCatalogAnalyzer {
         }
 
         /// Starts at most once, using an immutable snapshot of the exported PNG.
-        public func start(fileURL: URL) {
+        public func start(fileURL: URL, work: ProcessingLane = .standalone()) {
             state.withLock { state in
                 guard case .idle = state else { return }
                 guard !Task.isCancelled else { state = .cancelled(nil); return }
@@ -102,7 +140,9 @@ public actor ScreenCatalogAnalyzer {
                 let thumbnail = thumbnail
                 state = .pending(digest, Task.detached(priority: .userInitiated) {
                     try Task.checkCancellation()
-                    return try await ScreenCatalogAnalyzer.extractEvidence(snapshot.get(), thumbnail: thumbnail, recognize: recognize)
+                    return try await work.perform {
+                        try await ScreenCatalogAnalyzer.extractEvidence(snapshot.get(), thumbnail: thumbnail, recognize: recognize)
+                    }
                 })
             }
         }
@@ -150,26 +190,40 @@ public actor ScreenCatalogAnalyzer {
     public init() {
         recognize = { _, image in try await ScreenVisionFallback.recognize(image) }
         thumbnail = Self.proxyImage
+        recognitionOperation = nil
+        recognitionCache = .shared
     }
 
     init(recognize: @escaping @Sendable (Data) async throws -> ScreenVisionFallback.Recognition) {
         self.recognize = { data, _ in try await recognize(data) }
         thumbnail = Self.proxyImage
+        recognitionOperation = nil
+        recognitionCache = .init()
     }
 
     init(recognizeImage: @escaping Recognition, thumbnail: @escaping Thumbnail = ScreenCatalogAnalyzer.proxyImage) {
         recognize = recognizeImage
         self.thumbnail = thumbnail
+        recognitionOperation = nil
+        recognitionCache = .init()
+    }
+
+    init(recognitionOperation: @escaping @Sendable (URL) async throws -> ScreenVisionFallback.Recognition,
+         recognitionCache: ScreenRecognitionCache = .init()) {
+        self.recognitionOperation = recognitionOperation
+        self.recognitionCache = recognitionCache
+        recognize = { _, image in try await ScreenVisionFallback.recognize(image) }
+        thumbnail = Self.proxyImage
     }
 
     public func analyze(
-        fileURLs: [URL], useContextualNaming: Bool = true, useFoundationModels: Bool = true,
+        fileURLs: [URL], work: ProcessingLane = .standalone(), useContextualNaming: Bool = true, useFoundationModels: Bool = true,
         preparedRecognition: PreparedRecognition? = nil,
-        onProgress: @Sendable (Double, String) async -> Void = { _, _ in }
+        onProgress: @Sendable (Double, String) async throws -> Void = { _, _ in }
     ) async throws -> ScreenCatalog {
         try await withTaskCancellationHandler {
             do {
-                let result = try await catalog(fileURLs: fileURLs, useContextualNaming: useContextualNaming,
+                let result = try await catalog(fileURLs: fileURLs, work: work, useContextualNaming: useContextualNaming,
                                                useFoundationModels: useFoundationModels,
                                                preparedRecognition: preparedRecognition, onProgress: onProgress)
                 await preparedRecognition?.cancelAndDrain()
@@ -183,8 +237,8 @@ public actor ScreenCatalogAnalyzer {
     }
 
     private func catalog(
-        fileURLs: [URL], useContextualNaming: Bool, useFoundationModels: Bool,
-        preparedRecognition: PreparedRecognition?, onProgress: @Sendable (Double, String) async -> Void
+        fileURLs: [URL], work: ProcessingLane, useContextualNaming: Bool, useFoundationModels: Bool,
+        preparedRecognition: PreparedRecognition?, onProgress: @Sendable (Double, String) async throws -> Void
     ) async throws -> ScreenCatalog {
         try Task.checkCancellation()
         var fileDigests: [SHA256.Digest?] = []
@@ -195,8 +249,9 @@ public actor ScreenCatalogAnalyzer {
         var failures: Set<Int> = []
         for (index, url) in fileURLs.enumerated() {
             try Task.checkCancellation()
-            let data = try? Data(contentsOf: url)
-            let digest = data.map { SHA256.hash(data: $0) }
+            let digest = try await work.perform {
+                (try? Data(contentsOf: url)).map { SHA256.hash(data: $0) }
+            }
             if index == 0 { firstDigest = digest }
             if let digest { digests.append(digest) } else { failures.insert(index) }
             let source = digest.flatMap { firstByDigest[$0] } ?? index
@@ -211,7 +266,7 @@ public actor ScreenCatalogAnalyzer {
         let needsPrepared = useContextualNaming && !cached && firstDigest.map { completeEvidence[$0] == nil } == true
         let preparedTask = try await preparedRecognition?.task(matching: needsPrepared ? firstDigest : nil)
         if cached, let previousCatalog {
-            await onProgress(1, "Résultats réutilisés")
+            try await onProgress(1, "Résultats réutilisés")
             return previousCatalog
         }
         var savedSources = sources
@@ -224,11 +279,16 @@ public actor ScreenCatalogAnalyzer {
             var stateSources = sources
             var recognition: [Int: ScreenVisionFallback.Recognition] = [:]
             let pendingOCR = fileURLs.indices.filter { sources[$0] == $0 }
+            let cachedRecognitions = await recognitionCache.values(for: fileDigests.compactMap { $0 })
+            let recognitionOperation = recognitionOperation
+            let recognitionCache = recognitionCache
             let cachedEvidence = completeEvidence
             let fileDigests = fileDigests
             let recognize = recognize
             let thumbnail = thumbnail
-            let readings = try await Self.concurrentMap(pendingOCR, operation: { index -> (Int, Evidence?) in
+            // Prepared OCR owns its lane already; finish other evidence before waiting for it.
+            let readingOrder = preparedTask == nil ? pendingOCR : pendingOCR.filter { $0 != 0 } + pendingOCR.filter { $0 == 0 }
+            let readings = try await Self.orderedMap(readingOrder, work: work, operation: { index -> (Int, Evidence?) in
                 do {
                     if let digest = fileDigests[index], let evidence = cachedEvidence[digest] { return (index, evidence) }
                     let evidence: Evidence
@@ -236,26 +296,32 @@ public actor ScreenCatalogAnalyzer {
                     else {
                         let data = try Data(contentsOf: fileURLs[index])
                         guard SHA256.hash(data: data) == fileDigests[index] else { throw CocoaError(.fileReadUnknown) }
-                        evidence = try await Self.extractEvidence(data, thumbnail: thumbnail, recognize: recognize)
+                        let recognition: Recognition = { data, image in
+                            if let digest = fileDigests[index], let cached = cachedRecognitions[digest] { return cached }
+                            if let recognitionOperation { return try await recognitionOperation(fileURLs[index]) }
+                            return try await recognize(data, image)
+                        }
+                        evidence = try await Self.extractEvidence(data, thumbnail: thumbnail, recognize: recognition)
                     }
                     try Task.checkCancellation()
-                    if let digest = fileDigests[index] { await self.remember(evidence, for: digest) }
+                    if let digest = fileDigests[index] {
+                        await self.remember(evidence, for: digest)
+                        if let value = evidence.recognition, value.title != nil, !value.lines.isEmpty {
+                            await recognitionCache.insert(value, for: digest)
+                        }
+                    }
                     return (index, evidence)
                 }
                 catch is CancellationError { throw CancellationError() }
                 catch { return (index, nil) }
             }) { count in
-                await onProgress(Double(count) / Double(pendingOCR.count) * 0.1, "Lecture des écrans avec Vision")
+                try await onProgress(Double(count) / Double(pendingOCR.count) * 0.1, "Lecture des écrans avec Vision")
             }
             var samples = [[UInt8]?](repeating: nil, count: fileURLs.count)
             for (index, evidence) in readings {
                 samples[index] = evidence?.comparisonPixels
                 recognition[index] = evidence?.recognition
             }
-            let needsModelNames = pendingOCR.contains { recognition[$0]?.fastName == nil }
-            let preparedSessions = useFoundationModels && needsModelNames && ScreenSemanticNamer.isAvailable
-                ? (0..<2).map { _ in ScreenSemanticNamer.makeSession() } : []
-            for session in preparedSessions { session.prewarm() }
             var representatives: [Int] = []
             for index in fileURLs.indices {
                 try Task.checkCancellation()
@@ -263,23 +329,38 @@ public actor ScreenCatalogAnalyzer {
                     stateSources[index] = stateSources[sources[index]]
                     continue
                 }
-                // ponytail: at most three nearby representatives; uncertain comparisons retain separate states.
-                let candidates = representatives.compactMap { previous -> (Int, Double)? in
-                    guard let distance = Self.candidateDistance(pixels: samples[index], otherPixels: samples[previous]) else { return nil }
-                    if let current = recognition[index], let other = recognition[previous],
-                       current.clearlyDiffers(from: other) { return nil }
-                    return (previous, distance)
-                }.sorted { $0.1 == $1.1 ? $0.0 < $1.0 : $0.1 < $1.1 }.prefix(3)
-                for (previous, _) in candidates {
-                    if let current = recognition[index], let other = recognition[previous],
-                       let same = current.sameState(as: other) {
-                        if same { stateSources[index] = previous; break }
-                        continue
+                var distances: [(Int, Double)] = []
+                let currentPixels = samples[index]
+                let currentRecognition = recognition[index]
+                for start in stride(from: 0, to: representatives.count, by: 256) {
+                    let chunk = representatives[start..<min(start + 256, representatives.count)].map {
+                        ($0, samples[$0], recognition[$0])
+                    }
+                    let matches = try await work.perform {
+                        chunk.compactMap { previous, pixels, other -> (Int, Double)? in
+                            guard let distance = Self.candidateDistance(pixels: currentPixels, otherPixels: pixels) else { return nil }
+                            if let currentRecognition, let other, currentRecognition.clearlyDiffers(from: other) { return nil }
+                            return (previous, distance)
+                        }
+                    }
+                    distances.append(contentsOf: matches)
+                }
+                let unsorted = distances
+                let threeNearestRepresentatives = try await work.perform {
+                    Array(unsorted.sorted { $0.1 == $1.1 ? $0.0 < $1.0 : $0.1 < $1.1 }.prefix(3))
+                }
+                for (previous, _) in threeNearestRepresentatives {
+                    if let current = recognition[index], let other = recognition[previous] {
+                        let evidence = try await work.perform { current.sameState(as: other) }
+                        if let same = evidence {
+                            if same { stateSources[index] = previous; break }
+                            continue
+                        }
                     }
                     guard useFoundationModels && ScreenSemanticNamer.isAvailable else { continue }
                     do {
                         let compare: @Sendable () async throws -> Bool = {
-                            try await ScreenSemanticNamer.sameContent(fileURLs[previous], fileURLs[index])
+                            try await work.perform { try await ScreenSemanticNamer.sameContent(fileURLs[previous], fileURLs[index]) }
                         }
                         let same = digests.count == fileURLs.count
                             ? try await cachedComparison(Set([digests[previous], digests[index]]), operation: compare)
@@ -295,15 +376,15 @@ public actor ScreenCatalogAnalyzer {
                     }
                 }
                 if stateSources[index] == index { representatives.append(index) }
-                await onProgress(Double(index + 1) / Double(fileURLs.count) * 0.3 + 0.1,
+                try await onProgress(Double(index + 1) / Double(fileURLs.count) * 0.3 + 0.1,
                                  "Regroupement des états : \(index + 1) sur \(fileURLs.count)")
             }
             savedSources = stateSources
             let names = try await ScreenSemanticNamer.classify(
-                fileURLs: fileURLs, sources: stateSources, cachedNames: matchesPrevious && stateSources == previousSources ? previousNames : [:],
-                recognition: recognition, preparedSessions: preparedSessions, useFoundationModels: useFoundationModels
+                fileURLs: fileURLs, sources: stateSources, work: work, cachedNames: matchesPrevious && stateSources == previousSources ? previousNames : [:],
+                recognition: recognition, useFoundationModels: useFoundationModels
             ) { fraction, detail in
-                await onProgress(0.4 + fraction * 0.6, detail)
+                try await onProgress(0.4 + fraction * 0.6, detail)
             }
             contextual = names.allSatisfy { $0.error == nil && !$0.usedVision }
             visionNames = names.filter(\.usedVision).count
@@ -337,7 +418,8 @@ public actor ScreenCatalogAnalyzer {
             previousSources = savedSources
             previousNames = savedNames
         }
-        await onProgress(1, "Captures prêtes")
+        try await onProgress(1, "Captures prêtes")
+        try Task.checkCancellation()
         return catalog
     }
 
@@ -358,34 +440,19 @@ public actor ScreenCatalogAnalyzer {
         return result
     }
 
-    /// Refill a freed slot immediately instead of waiting for a two-item batch.
-    nonisolated static func concurrentMap<Input: Sendable, Output: Sendable>(
-        _ inputs: [Input], operation: @escaping @Sendable (Input) async throws -> Output,
-        onProgress: @Sendable (Int) async -> Void = { _ in }
+    nonisolated static func orderedMap<Input: Sendable, Output: Sendable>(
+        _ inputs: [Input], work: ProcessingLane = .standalone(),
+        operation: @escaping @Sendable (Input) async throws -> Output,
+        onProgress: @Sendable (Int) async throws -> Void = { _ in }
     ) async throws -> [Output] {
-        try Task.checkCancellation()
-        return try await withThrowingTaskGroup(of: (Int, Output).self) { group in
-            var next = 0
-            var completed = 0
-            var results = [Output?](repeating: nil, count: inputs.count)
-            for _ in 0..<min(2, inputs.count) {
-                let index = next
-                group.addTask { (index, try await operation(inputs[index])) }
-                next += 1
-            }
-            while let (index, result) = try await group.next() {
-                try Task.checkCancellation()
-                results[index] = result
-                completed += 1
-                if next < inputs.count {
-                    let index = next
-                    group.addTask { (index, try await operation(inputs[index])) }
-                    next += 1
-                }
-                await onProgress(completed)
-            }
-            return results.compactMap { $0 }
+        var results: [Output] = []
+        for input in inputs {
+            let value = try await work.perform { try await operation(input) }
+            results.append(value)
+            try await onProgress(results.count)
+            try Task.checkCancellation()
         }
+        return results
     }
 
     nonisolated static func candidateDistance(pixels: [UInt8]?, otherPixels: [UInt8]?) -> Double? {

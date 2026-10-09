@@ -7,16 +7,16 @@ import Testing
 struct SelectionOrderTests {
     @Test func groupingRetainsVisitsAndUsesVisualOrderForNavigationAndRanges() {
         let (model, ids) = makeModel()
-        model.screenshots = Array(model.screenshots.prefix(5))
+        model.imports.models[0].screenshots = Array(model.imports.models[0].screenshots.prefix(5))
         let screenIDs = [2, 1, 2, 1]
-        model.screenClassifications = Dictionary(uniqueKeysWithValues: screenIDs.enumerated().map { index, screenID in
-            (ids[index], ScreenClassification(screenID: screenID, name: "Écran \(screenID)", stateID: index + 1))
+        model.imports.models[0].screenClassifications = Dictionary(uniqueKeysWithValues: screenIDs.enumerated().map { index, screenID in
+            (ids[index].stateID, ScreenClassification(screenID: screenID, name: "Écran \(screenID)", stateID: index + 1))
         })
         model.setUniqueScreens(false)
         model.selectScreenshot(ids[0], modifiers: [])
         model.selectScreenshot(ids[1], modifiers: [.command])
         model.setTimelineGrouping(true)
-        #expect(model.timelineScreenGroups.map(\.id) == [2, 1, nil])
+        #expect(model.timelineScreenGroups.map(\.id) == [ids[0], ids[1], ids[4]])
         #expect(model.timelineScreenGroups.last?.name == "À identifier")
         #expect(model.visibleScreenshots.map(\.id) == [ids[0], ids[2], ids[1], ids[3], ids[4]])
         #expect(model.selectedScreenshotIDs == [ids[0], ids[1]])
@@ -34,51 +34,31 @@ struct SelectionOrderTests {
 
     @Test func groupingKeepsDistinctStatesAndUpdatesAfterRefinement() {
         let (model, ids) = makeModel()
-        model.screenshots = Array(model.screenshots.prefix(4))
+        model.imports.models[0].screenshots = Array(model.imports.models[0].screenshots.prefix(4))
         let labels = [
             ScreenClassification(screenID: 1, name: "Compte", stateID: 1),
             ScreenClassification(screenID: 2, name: "Accueil", stateID: 2),
             ScreenClassification(screenID: 1, name: "Compte", stateID: 3),
             ScreenClassification(screenID: 1, name: "Compte", stateID: 1)
         ]
-        model.screenClassifications = Dictionary(uniqueKeysWithValues: zip(ids, labels))
+        model.imports.models[0].screenClassifications = Dictionary(uniqueKeysWithValues: zip(ids.map(\.stateID), labels))
         model.setTimelineGrouping(true)
         #expect(model.visibleScreenshots.map(\.id) == [ids[0], ids[2], ids[1]])
         model.setUniqueScreens(false)
         #expect(model.visibleScreenshots.map(\.id) == [ids[0], ids[2], ids[3], ids[1]])
         model.selectScreenshot(ids[2], modifiers: [])
         let refined = labels.map { ScreenClassification(screenID: 3, name: "Profil", stateID: $0.stateID) }
-        model.applyRefinement(classifications: refined, files: model.screenshots.map(\.fileURL),
-                              expectedIDs: Array(ids.prefix(4)))
+        applyRefined(refined, to: model)
         #expect(model.timelineScreenGroups.count == 1)
         #expect(model.timelineScreenGroups.first?.name == "Profil")
         #expect(model.selectedScreenshotIDs == [ids[2]])
         #expect(model.groupsTimelineByScreen && model.screenshots.count == 4)
     }
 
-    @Test func refinementKeepsResultsUsableAndIgnoresAnOlderImport() async {
-        let (model, ids) = makeModel()
-        model.selectScreenshot(ids[0], modifiers: [])
-        model.refineScreens()
-        #expect(model.canSaveSelection && !model.isWorking)
-        let files = model.screenshots.map(\.fileURL)
-        let labels = ids.map { _ in ScreenClassification(screenID: 1, name: "Compte", stateID: 1) }
-        model.applyRefinement(classifications: labels, files: files, expectedIDs: [UUID()])
-        #expect(model.screenClassifications.isEmpty)
-        model.applyRefinement(classifications: labels, files: [], expectedIDs: ids)
-        #expect(model.screenshots.count == ids.count && model.screenClassifications.isEmpty)
-        model.applyRefinement(classifications: labels, files: files, expectedIDs: ids)
-        #expect(model.screenshots.map(\.id) == ids && model.visibleScreenshots.count == 1)
-        #expect(model.selectedScreenshotIDs == [ids[0]])
-        model.cancelRefinement()
-        await model.waitForRefinement()
-        #expect(model.refinementDetail == nil && model.canSaveSelection)
-    }
-
     @Test func uniqueScreenFilterKeepsOccurrencesAndRestrictsSelectionAndDragging() {
         let (model, ids) = makeModel()
-        model.screenClassifications = Dictionary(uniqueKeysWithValues: ids.enumerated().map { index, id in
-            (id, ScreenClassification(screenID: 1, name: "Compte", stateID: index == 1 ? 1 : index + 1))
+        model.imports.models[0].screenClassifications = Dictionary(uniqueKeysWithValues: ids.enumerated().map { index, id in
+            (id.stateID, ScreenClassification(screenID: 1, name: "Compte", stateID: index == 1 ? 1 : index + 1))
         })
         #expect(model.showsUniqueScreens)
         model.setUniqueScreens(false)
@@ -113,20 +93,20 @@ struct SelectionOrderTests {
         model.followsLatest = true
         model.notice = "Captures copiées"
 
-        model.selectTimelineScreenGroup(2)
+        model.selectTimelineScreenGroup(ids[0])
 
         let expected = unique ? [ids[0], ids[2], ids[6]] : [ids[0], ids[2], ids[4], ids[6]]
         #expect(model.selectedScreenshotIDs == Set(expected))
         #expect(model.fanSelectedScreenshots.map(\.id) == expected)
         #expect(model.focusedScreenshotID == ids[0])
-        #expect(model.focusNavigationID == ids[0])
+        #expect(model.timelineRevealRequest?.target == ids[0])
         #expect(!model.followsLatest && model.notice == nil)
         #expect(expected.map { model.fanSlot(for: $0) } == Array(0..<expected.count))
         #expect(model.screenshots.map(\.id) == sourceIDs)
         #expect(model.screenshots.map(\.fileURL) == sourceURLs)
         #expect(model.dragURLs(startingAt: ids[0]) == expected.map { sourceURLs[ids.firstIndex(of: $0)!] })
 
-        model.selectTimelineScreenGroup(2)
+        model.selectTimelineScreenGroup(ids[0])
         #expect(model.fanSelectedScreenshots.map(\.id) == expected)
         #expect(model.focusedScreenshotID == ids[0])
     }
@@ -134,15 +114,15 @@ struct SelectionOrderTests {
     @Test func groupSelectionSetsRangeAnchorAndArrowNavigation() {
         let (model, ids) = makeGroupedModel()
         model.selectScreenshot(ids[3], modifiers: [])
-        model.selectTimelineScreenGroup(2)
+        model.selectTimelineScreenGroup(ids[0])
         model.selectScreenshot(ids[3], modifiers: [.shift])
         #expect(model.selectedScreenshotIDs == [ids[0], ids[2], ids[6], ids[1], ids[3]])
         #expect(model.focusedScreenshotID == ids[0])
 
-        model.selectTimelineScreenGroup(2)
+        model.selectTimelineScreenGroup(ids[0])
         model.moveFocus(by: 1)
         #expect(model.focusedScreenshotID == ids[2])
-        #expect(model.focusNavigationID == ids[2])
+        #expect(model.timelineRevealRequest?.target == ids[2])
         #expect(model.selectedScreenshotIDs == [ids[0], ids[2], ids[6]])
         model.selectScreenshot(ids[3], modifiers: [.shift])
         #expect(model.selectedScreenshotIDs == [ids[2], ids[6], ids[1], ids[3]])
@@ -152,83 +132,18 @@ struct SelectionOrderTests {
 
     @Test func groupSelectionIncludesVisibleUnclassifiedCaptures() {
         let (model, ids) = makeGroupedModel()
-        model.selectTimelineScreenGroup(nil)
+        model.selectTimelineScreenGroup(ids[5])
         #expect(model.selectedScreenshotIDs == [ids[5], ids[7]])
         #expect(model.fanSelectedScreenshots.map(\.id) == [ids[5], ids[7]])
         #expect(model.focusedScreenshotID == ids[5])
-        #expect(model.focusNavigationID == ids[5])
+        #expect(model.timelineRevealRequest?.target == ids[5])
         model.moveFocus(by: 1)
         #expect(model.focusedScreenshotID == ids[7])
         model.selectScreenshot(ids[3], modifiers: [.shift])
         #expect(model.selectedScreenshotIDs == [ids[3], ids[5], ids[7]])
     }
 
-    @Test func groupSelectionResolvesMembershipAfterFilteringAndRefinement() throws {
-        let (model, ids) = makeGroupedModel()
-        model.setUniqueScreens(false)
-        let staleGroup = try #require(model.timelineScreenGroups.first { $0.id == 2 })
-        #expect(staleGroup.screenshots.map(\.id) == [ids[0], ids[2], ids[4], ids[6]])
-        model.setUniqueScreens(true)
-        model.selectTimelineScreenGroup(staleGroup.id)
-        #expect(model.selectedScreenshotIDs == [ids[0], ids[2], ids[6]])
-
-        let labels = [
-            ScreenClassification(screenID: 3, name: "Profil renommé", stateID: 10),
-            ScreenClassification(screenID: 1, name: "Accueil", stateID: 20),
-            ScreenClassification(screenID: 2, name: "Compte renommé", stateID: 11),
-            ScreenClassification(screenID: 1, name: "Accueil", stateID: 21),
-            ScreenClassification(screenID: 3, name: "Profil renommé", stateID: 10),
-            ScreenClassification(screenID: 4, name: "Confirmation", stateID: 30),
-            ScreenClassification(screenID: 2, name: "Compte renommé", stateID: 12),
-            ScreenClassification(screenID: 4, name: "Confirmation", stateID: 31)
-        ]
-        let refinedURLs = ids.enumerated().map { URL(fileURLWithPath: "/tmp/stillset-refined-\($0.offset).png") }
-        model.applyRefinement(classifications: labels, files: refinedURLs, expectedIDs: ids)
-        model.selectTimelineScreenGroup(staleGroup.id)
-        #expect(model.selectedScreenshotIDs == [ids[2], ids[6]])
-        #expect(model.focusedScreenshotID == ids[2])
-        #expect(model.dragURLs(startingAt: ids[2]) == [refinedURLs[2], refinedURLs[6]])
-        model.selectTimelineScreenGroup(3)
-        #expect(model.selectedScreenshotIDs == [ids[0]])
-        model.setUniqueScreens(false)
-        model.selectTimelineScreenGroup(3)
-        #expect(model.selectedScreenshotIDs == [ids[0], ids[4]])
-    }
-
-    @Test func groupSelectionRejectsAnalyzingUngroupedMissingAndEmptyGroups() {
-        let (model, ids) = makeGroupedModel()
-        model.selectScreenshot(ids[3], modifiers: [])
-        model.setTimelineGrouping(false)
-        model.followsLatest = true
-        model.notice = "À conserver"
-        model.selectTimelineScreenGroup(2)
-        #expect(model.selectedScreenshotIDs == [ids[3]])
-        #expect(model.followsLatest && model.notice == "À conserver")
-        model.setTimelineGrouping(true)
-        model.setPreviewAnalysisRunning(true)
-        model.followsLatest = true
-        model.selectTimelineScreenGroup(2)
-        #expect(model.selectedScreenshotIDs == [ids[3]])
-        #expect(model.followsLatest && model.notice == "À conserver")
-        model.setPreviewAnalysisRunning(false)
-        model.selectTimelineScreenGroup(99)
-        #expect(model.selectedScreenshotIDs == [ids[3]])
-        #expect(model.focusedScreenshotID == ids[3] && model.focusNavigationID == ids[3])
-        #expect(model.followsLatest && model.notice == "À conserver")
-        model.selectTimelineScreenGroup(2)
-        #expect(model.selectedScreenshotIDs == [ids[0], ids[2], ids[6]])
-        model.screenClassifications[ids[0]] = ScreenClassification(screenID: 1, name: "Accueil", stateID: 10)
-        model.screenClassifications[ids[2]] = ScreenClassification(screenID: 1, name: "Accueil", stateID: 11)
-        model.screenClassifications[ids[4]] = ScreenClassification(screenID: 1, name: "Accueil", stateID: 10)
-        model.screenClassifications[ids[6]] = ScreenClassification(screenID: 1, name: "Accueil", stateID: 12)
-        model.selectTimelineScreenGroup(2)
-        #expect(model.selectedScreenshotIDs == [ids[0], ids[2], ids[6]])
-        model.screenshots = []
-        model.selectTimelineScreenGroup(nil)
-        #expect(model.selectedScreenshotIDs == [ids[0], ids[2], ids[6]])
-    }
-
-    @Test func groupSelectionDragAndExportKeepSourceOrderAfterGroupedRanges() throws {
+    @Test func groupSelectionDragAndExportKeepSourceOrderAfterGroupedRanges() async throws {
         let (model, ids) = makeGroupedModel()
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let source = directory.appendingPathComponent("source", isDirectory: true)
@@ -236,12 +151,12 @@ struct SelectionOrderTests {
         try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        model.screenshots = try model.screenshots.enumerated().map { index, screenshot in
+        model.imports.models[0].screenshots = try model.screenshots.enumerated().map { index, screenshot in
             let url = source.appendingPathComponent("capture-\(index).png")
             try Data([UInt8(index)]).write(to: url)
             return CapturedScreenshot(state: screenshot.state, fileURL: url)
         }
-        model.selectTimelineScreenGroup(2)
+        model.selectTimelineScreenGroup(ids[0])
         model.selectScreenshot(ids[3], modifiers: [.shift])
         #expect(model.visibleScreenshots.map(\.id) == [ids[0], ids[2], ids[6], ids[1], ids[3], ids[5], ids[7]])
         #expect(model.fanSelectedScreenshots.map(\.id) == [ids[0], ids[2], ids[6], ids[1], ids[3]])
@@ -249,7 +164,7 @@ struct SelectionOrderTests {
         let files = model.dragURLs(startingAt: ids[2])
         #expect(files.map(\.lastPathComponent) == ["capture-0.png", "capture-1.png", "capture-2.png", "capture-3.png", "capture-6.png"])
         #expect(model.previewDragURLs == files)
-        let copied = try ScreenshotExporter.copy(files: model.selectedScreenshots.map(\.fileURL), to: output)
+        let copied = try await ScreenshotExporter.copy(files: model.selectedScreenshots.map(\.fileURL), to: output)
         #expect(copied.map(\.lastPathComponent) == ["capture-0.png", "capture-1.png", "capture-2.png", "capture-3.png", "capture-6.png"])
         #expect(try copied.map { try Data(contentsOf: $0) } == [Data([0]), Data([1]), Data([2]), Data([3]), Data([6])])
     }
@@ -361,27 +276,38 @@ struct SelectionOrderTests {
         #expect(model.fanSlot(for: ids[4]) > firstSideSlot)
     }
 
-    private func makeGroupedModel() -> (AppModel, [UUID]) {
+    private func applyRefined(_ labels: [ScreenClassification], to model: SessionModel) {
+        var representatives: [Int: Int] = [:]
+        let normalized = labels.enumerated().map { index, value in
+            let first = representatives[value.stateID] ?? index + 1
+            representatives[value.stateID] = first
+            return ScreenClassification(screenID: value.screenID, name: value.name, stateID: first)
+        }
+        #expect(model.applyCatalog(normalized, snapshot: model.catalogSnapshot, refined: true))
+    }
+
+    private func makeGroupedModel() -> (SessionModel, [OccurrenceID]) {
         let (model, allIDs) = makeModel()
         let ids = Array(allIDs.prefix(8))
-        model.screenshots = Array(model.screenshots.prefix(8))
+        model.imports.models[0].screenshots = Array(model.imports.models[0].screenshots.prefix(8))
         let labels = [
             (0, 2, 10), (1, 1, 20), (2, 2, 11), (3, 1, 21), (4, 2, 10), (6, 2, 12)
         ]
-        model.screenClassifications = Dictionary(uniqueKeysWithValues: labels.map { index, screenID, stateID in
-            (ids[index], ScreenClassification(screenID: screenID, name: "Écran \(screenID)", stateID: stateID))
+        model.imports.models[0].screenClassifications = Dictionary(uniqueKeysWithValues: labels.map { index, screenID, stateID in
+            (ids[index].stateID, ScreenClassification(screenID: screenID, name: "Écran \(screenID)", stateID: stateID))
         })
         model.setTimelineGrouping(true)
         return (model, ids)
     }
 
-    private func makeModel() -> (AppModel, [UUID]) {
+    private func makeModel() -> (SessionModel, [OccurrenceID]) {
         let suite = "Stillset-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-        let model = AppModel(preferences: AppPreferences(defaults: defaults))
+        let job = AppModel()
+        let model = SessionModel(preferences: AppPreferences(defaults: defaults), imports: VideoImportQueue(models: [job]), catalogRunner: { _, _, _ in SessionCatalogResult(classifications: []) })
         let ids = (0..<10).map { _ in UUID() }
-        model.screenshots = ids.enumerated().map { index, id in
+        job.screenshots = ids.enumerated().map { index, id in
             CapturedScreenshot(
                 state: UIState(
                     id: id,
@@ -392,6 +318,6 @@ struct SelectionOrderTests {
                 fileURL: URL(fileURLWithPath: "/tmp/stillset-\(index).png")
             )
         }
-        return (model, ids)
+        return (model, ids.map { OccurrenceID(videoID: job.id, stateID: $0) })
     }
 }

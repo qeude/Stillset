@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ImportView: View {
-    var model: AppModel
+    let chooseVideos: () -> Void
 
     var body: some View {
         VStack(spacing: 20) {
@@ -9,11 +9,11 @@ struct ImportView: View {
                 .frame(maxWidth: 500)
                 .frame(height: 300)
 
-            Text("Déposez une vidéo")
+            Text("Déposez vos vidéos")
                 .font(.system(size: 29, weight: .semibold))
                 .foregroundStyle(StillsetStyle.ink)
 
-            Button("Ouvrir…", action: model.chooseVideo)
+            Button("Ouvrir…", action: chooseVideos)
                 .buttonStyle(.borderedProminent)
                 .buttonBorderShape(.capsule)
                 .controlSize(.large)
