@@ -6,7 +6,7 @@ actor IncrementalCaptures {
 
     private let videoURL: URL
     private let folderURL: URL
-    private let preparedRecognition: ScreenCatalogAnalyzer.PreparedRecognition
+    private let preparedRecognition: ScreenCatalogAnalyzer.PreparedRecognition?
     private let onCapture: @Sendable (CapturedScreenshot) async -> Void
     private let export: Export
     private var pending: Task<Void, Error>?
@@ -15,7 +15,7 @@ actor IncrementalCaptures {
     private var buffered: [UIState] = []
     private(set) var completed: [CapturedScreenshot] = []
 
-    init(videoURL: URL, folderURL: URL, preparedRecognition: ScreenCatalogAnalyzer.PreparedRecognition,
+    init(videoURL: URL, folderURL: URL, preparedRecognition: ScreenCatalogAnalyzer.PreparedRecognition?,
          export: @escaping Export = { states, video, folder, ordinal, callback in
              try await ScreenshotExporter.export(states: states, from: video, to: folder,
                                                  startingIndex: ordinal, onScreenshot: callback)
@@ -52,7 +52,7 @@ actor IncrementalCaptures {
         pending = Task {
             try Task.checkCancellation()
             _ = try await export(states, videoURL, folderURL, ordinal) { index, url in
-                if ordinal + index == 0 { self.preparedRecognition.start(fileURL: url) }
+                if ordinal + index == 0 { self.preparedRecognition?.start(fileURL: url) }
                 await self.commit(CapturedScreenshot(state: states[index], fileURL: url))
             }
         }

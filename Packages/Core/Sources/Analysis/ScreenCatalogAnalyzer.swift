@@ -22,6 +22,15 @@ public struct ScreenCatalog: Sendable {
     public let visionNames: Int
     public let recognitionFailures: Int
     public let errorDescription: String?
+
+    public init(classifications: [ScreenClassification], usedContextualNaming: Bool,
+                visionNames: Int, recognitionFailures: Int, errorDescription: String?) {
+        self.classifications = classifications
+        self.usedContextualNaming = usedContextualNaming
+        self.visionNames = visionNames
+        self.recognitionFailures = recognitionFailures
+        self.errorDescription = errorDescription
+    }
 }
 
 /// Screen identity is metadata: every input keeps its occurrence and original PNG.

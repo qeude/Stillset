@@ -31,7 +31,10 @@ Open **Stillset → Réglages…** (**⌘,**) to choose **Uniques / Toutes** and
 
 Automatic analysis finishes without Foundation Models requests. **Affiner avec l’IA** optionally refines ambiguous names and groups while navigation and export remain available. **Arrêter l’affinage** keeps the current results.
 
-Successful OCR and comparison samples are reused for the current recording, including across local analysis and AI refinement. Results are held for the current session. Recognition and grouping are experimental; unfamiliar layouts may require manual review.
+Successful OCR and comparison samples are reused for the current recording, including across local analysis and AI refinement. PNG captures stay in temporary storage for the current session and are removed on the next import or normal app teardown. Recent completed analyses, including partial recognition diagnostics, are reused automatically for identical video content. The local JSON cache contains metadata only, with no images, video copies, or file paths. It retains at most 50 entries for 30 days, within 10 MiB total and 1 MiB per entry. Larger analyses remain usable without caching. Every import recreates full-resolution PNGs from the original video. **Réanalyser** bypasses reuse and replaces cached metadata only after a successful fresh analysis. Successful optional AI refinement updates the cached metadata.
+
+Recognition and grouping are experimental; unfamiliar layouts may require manual review.
+
 
 ## Development
 

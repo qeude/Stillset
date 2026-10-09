@@ -82,6 +82,13 @@ public final class AppModel {
     var followsLatest = true
 
     private let preferences: AppPreferences
+    private let recentAnalysisCache: RecentAnalysisCache
+    private let localCatalog: (@Sendable ([URL]) async throws -> ScreenCatalog)?
+    private let refineCatalog: (@Sendable ([URL]) async throws -> ScreenCatalog)?
+    private var sessionID = UUID()
+    private var analysisAttemptID: UUID?
+    private var cachedContext: (result: AnalysisResult, source: RecentAnalysisCache.Source)?
+    private var terminationObserver: NSObjectProtocol?
     var chooseSaveFolder: (@MainActor (ScreenshotExportPlan) -> URL?)?
     var beforeOrganization: @Sendable () async throws -> Void = {}
     var copyFiles: @Sendable (ScreenshotExportPlan, URL, @Sendable (Double, String) -> Void) async throws -> [URL] = {
@@ -91,10 +98,24 @@ public final class AppModel {
     private var selectionAnchorID: UUID?
     private var fanSlots: [UUID: Int] = [:]
 
-    public init(preferences: AppPreferences) {
+    public convenience init(preferences: AppPreferences) {
+        self.init(preferences: preferences, cache: .shared)
+    }
+
+    init(preferences: AppPreferences, cache: RecentAnalysisCache,
+         localCatalog: (@Sendable ([URL]) async throws -> ScreenCatalog)? = nil,
+         refineCatalog: (@Sendable ([URL]) async throws -> ScreenCatalog)? = nil) {
         self.preferences = preferences
+        self.recentAnalysisCache = cache
+        self.localCatalog = localCatalog
+        self.refineCatalog = refineCatalog
         showsUniqueScreens = preferences.captureDefault == .uniques
         groupsTimelineByScreen = preferences.organisationDefault == .byScreen
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.cleanUpSession() }
+        }
     }
 
     #if DEBUG
@@ -109,6 +130,8 @@ public final class AppModel {
     #endif
 
     isolated deinit {
+        if let terminationObserver { NotificationCenter.default.removeObserver(terminationObserver) }
+        if let stagingFolderURL { try? FileManager.default.removeItem(at: stagingFolderURL) }
         analysisOperation?.task?.cancel()
         saveOperation?.task?.cancel()
         refinementOperation?.task?.cancel()
@@ -206,6 +229,15 @@ public final class AppModel {
     }
 
     func importVideo(_ url: URL) {
+        beginAnalysis(url, reuseCache: true)
+    }
+
+    func reanalyze() {
+        guard let videoURL else { return }
+        beginAnalysis(videoURL, reuseCache: false)
+    }
+
+    private func beginAnalysis(_ url: URL, reuseCache: Bool) {
         guard !isWorking else { return }
         guard ["mov", "mp4"].contains(url.pathExtension.lowercased()) else {
             errorMessage = "Choisissez un enregistrement MOV ou MP4."
@@ -213,138 +245,227 @@ public final class AppModel {
         }
         cancelRefinement()
         screenCatalogAnalyzer = ScreenCatalogAnalyzer()
-        screenshots = []
-        screenClassifications = [:]
+        sessionID = UUID()
+        cachedContext = nil
+        let oldRefinement = refinementOperation?.task
+        let oldStaging = stagingFolderURL
+        stagingFolderURL = nil
+        clearAnalysisCaptures()
         showsUniqueScreens = preferences.captureDefault == .uniques
         groupsTimelineByScreen = preferences.organisationDefault == .byScreen
+        analysisStartedAt = Date()
+        videoURL = url
+        exportedFolderURL = nil
+        errorMessage = nil
+        analyze(url, reuseCache: reuseCache, oldRefinement: oldRefinement, oldStaging: oldStaging)
+    }
+
+    private func clearAnalysisCaptures() {
+        if let stagingFolderURL { try? FileManager.default.removeItem(at: stagingFolderURL) }
+        stagingFolderURL = nil
+        screenshots = []
+        screenClassifications = [:]
         setSelection([])
         focusedScreenshotID = nil
         focusNavigationID = nil
         selectionAnchorID = nil
         analysisPreviewFrames = []
         detectedScreens = []
-        analysisStartedAt = Date()
         followsLatest = true
-        videoURL = url
         notice = nil
-        exportedFolderURL = nil
-        errorMessage = nil
-        analyze(url)
     }
 
-    private func analyze(_ videoURL: URL) {
+    private func acceptsAnalysis(session: UUID, attempt: UUID) -> Bool {
+        sessionID == session && analysisAttemptID == attempt
+    }
+
+    private enum ReconstructionError: Error {
+        case sourceChanged
+    }
+
+    private func analyze(_ videoURL: URL, reuseCache: Bool, oldRefinement: Task<Void, Never>?, oldStaging: URL?) {
         let catalogAnalyzer = screenCatalogAnalyzer
-        let operation = AnalysisOperation()
-        analysisOperation = operation
+        let localCatalog = localCatalog
+        let cache = recentAnalysisCache
+        let session = sessionID
+        let firstAttempt = UUID()
+        analysisAttemptID = firstAttempt
+        analysisOperation = AnalysisOperation()
         analysisOutcome = nil
-        let token = operation.id
-        let oldRefinement = refinementOperation?.task
-        let oldStaging = stagingFolderURL
-        stagingFolderURL = nil
         let beforeOrganization = beforeOrganization
-        progress = operation.progress
+        progress = AnalysisProgress(stage: .decoding, fraction: 0, detail: "Lecture de la vidéo")
         let model = self
         analysisOperation?.task = Task.detached(priority: .userInitiated) {
             await oldRefinement?.value
             if let oldStaging { try? FileManager.default.removeItem(at: oldStaging) }
-            await MainActor.run {
-                guard model.analysisOperation?.id == token else { return }
-                model.refinementOperation = nil
-            }
+            await MainActor.run { model.refinementOperation = nil }
             let preparedRecognition = ScreenCatalogAnalyzer.PreparedRecognition()
             await withTaskCancellationHandler {
                 var collector: IncrementalCaptures?
+                var attempt = firstAttempt
                 do {
-                    try Task.checkCancellation()
-                    let folder = FileManager.default.temporaryDirectory
-                        .appendingPathComponent("Stillset-\(UUID().uuidString)", isDirectory: true)
-                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                    await MainActor.run {
-                        guard model.analysisOperation?.id == token else { return }
-                        model.stagingFolderURL = folder
-                    }
-                    let captures = IncrementalCaptures(videoURL: videoURL, folderURL: folder,
-                                                       preparedRecognition: preparedRecognition) { capture in
-                        await MainActor.run {
-                            guard model.analysisOperation?.id == token else { return }
-                            model.screenshots.append(capture)
-                            if model.followsLatest {
-                                model.focusedScreenshotID = capture.id
-                                model.setSelection([capture.id], resetFan: true)
-                            }
+                    var source = try await cache.fingerprint(for: videoURL)
+                    var cached: CachedAnalysis?
+                    if reuseCache, let source { cached = try await cache.load(for: source) }
+                    while true {
+                        try Task.checkCancellation()
+                        let currentAttempt = attempt
+                        let folder = FileManager.default.temporaryDirectory
+                            .appendingPathComponent("Stillset-\(UUID().uuidString)", isDirectory: true)
+                        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                        let registered = await MainActor.run {
+                            guard model.acceptsAnalysis(session: session, attempt: currentAttempt) else { return false }
+                            model.stagingFolderURL = folder
+                            return true
                         }
-                    }
-                    collector = captures
-                    let result = try await AnalysisPipeline.run(
-                        url: videoURL,
-                        onProgress: { update in
-                            Task { @MainActor in
-                                guard model.analysisOperation?.id == token,
-                                      model.progress.stage == .decoding,
-                                      update.stage == .decoding else { return }
-                                model.progress = update
-                            }
-                        },
-                        onAnalyzedFrames: { frames in
+                        guard registered else {
+                            try? FileManager.default.removeItem(at: folder)
+                            return
+                        }
+                        let captures = IncrementalCaptures(videoURL: videoURL, folderURL: folder,
+                                                           preparedRecognition: cached == nil ? preparedRecognition : nil) { capture in
                             await MainActor.run {
-                                guard model.analysisOperation?.id == token, model.progress.stage == .decoding else { return }
-                                let colorPreviews = frames.filter { $0.previewRGBA != nil }
-                                model.analysisPreviewFrames = Array((model.analysisPreviewFrames + colorPreviews).suffix(2))
+                                guard model.acceptsAnalysis(session: session, attempt: currentAttempt) else { return }
+                                model.screenshots.append(capture)
+                                if model.followsLatest {
+                                    model.focusedScreenshotID = capture.id
+                                    model.setSelection([capture.id], resetFan: true)
+                                }
                             }
-                        },
-                        onDetectedScreens: { screens in
+                        }
+                        collector = captures
+                        do {
+                            let result: AnalysisResult
+                            if let cached {
+                                result = cached.result(for: videoURL)
+                                await MainActor.run {
+                                    guard model.acceptsAnalysis(session: session, attempt: currentAttempt) else { return }
+                                    model.detectedScreens = result.states
+                                }
+                                try await captures.append(result.states)
+                            } else {
+                                result = try await AnalysisPipeline.run(
+                                    url: videoURL,
+                                    onProgress: { update in
+                                        Task { @MainActor in
+                                            guard model.acceptsAnalysis(session: session, attempt: currentAttempt),
+                                                  model.progress.stage == .decoding, update.stage == .decoding else { return }
+                                            model.progress = update
+                                        }
+                                    },
+                                    onAnalyzedFrames: { frames in
+                                        await MainActor.run {
+                                            guard model.acceptsAnalysis(session: session, attempt: currentAttempt),
+                                                  model.progress.stage == .decoding else { return }
+                                            let colorPreviews = frames.filter { $0.previewRGBA != nil }
+                                            model.analysisPreviewFrames = Array((model.analysisPreviewFrames + colorPreviews).suffix(2))
+                                        }
+                                    },
+                                    onDetectedScreens: { screens in
+                                        await MainActor.run {
+                                            guard model.acceptsAnalysis(session: session, attempt: currentAttempt) else { return }
+                                            model.detectedScreens.append(contentsOf: screens)
+                                        }
+                                        try await captures.append(screens)
+                                    }
+                                )
+                            }
+                            try Task.checkCancellation()
+                            let completed = try await captures.finish()
+                            guard completed.map(\.id) == result.states.map(\.id) else {
+                                throw ScreenshotExportError.invalidImageSequence
+                            }
+                            let files = completed.map(\.fileURL)
+                            try Task.checkCancellation()
+                            let catalog: ScreenCatalog
+                            if let cached {
+                                catalog = cached.catalog
+                            } else {
+                                await MainActor.run {
+                                    guard model.acceptsAnalysis(session: session, attempt: currentAttempt) else { return }
+                                    model.progress = AnalysisProgress(stage: .annotating, fraction: 0, detail: "Organisation des captures…")
+                                }
+                                try await beforeOrganization()
+                                if let localCatalog {
+                                    catalog = try await localCatalog(files)
+                                } else {
+                                    catalog = try await catalogAnalyzer.analyze(fileURLs: files, useFoundationModels: false, preparedRecognition: preparedRecognition) { fraction, _ in
+                                        await MainActor.run {
+                                            guard model.acceptsAnalysis(session: session, attempt: currentAttempt) else { return }
+                                            model.progress = AnalysisProgress(stage: .annotating, fraction: fraction, detail: "Organisation des captures…")
+                                        }
+                                    }
+                                }
+                            }
+                            if cached == nil { await preparedRecognition.cancelAndDrain() }
+                            let namedFiles = try ScreenshotExporter.prepareNamedFiles(files: files, screenNames: catalog.classifications.map(\.name))
+                            if let originalSource = source {
+                                let matches = try await cache.matches(originalSource)
+                                if matches == false { throw ReconstructionError.sourceChanged }
+                                if matches == nil { source = nil }
+                            }
+                            try Task.checkCancellation()
+                            let completedSource = source
+                            let wasCached = cached != nil
+                            let accepted = await MainActor.run {
+                                guard model.acceptsAnalysis(session: session, attempt: currentAttempt), !Task.isCancelled else { return false }
+                                model.screenClassifications = Dictionary(uniqueKeysWithValues: zip(result.states, catalog.classifications).map { ($0.0.id, $0.1) })
+                                model.screenshots = zip(result.states, namedFiles).map { CapturedScreenshot(state: $0.0, fileURL: $0.1) }
+                                model.setUniqueScreens(model.showsUniqueScreens)
+                                model.cachedContext = completedSource.map { (result, $0) }
+                                let warning = Self.catalogWarning(catalog)
+                                model.notice = wasCached
+                                    ? (["Analyse récente retrouvée", warning].compactMap { $0 }.joined(separator: ". "))
+                                    : warning
+                                model.progress = AnalysisProgress(stage: .complete, fraction: 1, detail: "\(files.count) captures prêtes")
+                                return true
+                            }
+                            guard accepted else { return }
+                            if let completedSource {
+                                if wasCached {
+                                    try await cache.markUsed(completedSource)
+                                } else if let snapshot = CachedAnalysis(result: result, catalog: catalog) {
+                                    try await cache.store(snapshot, for: completedSource)
+                                }
+                            }
+                            try Task.checkCancellation()
                             await MainActor.run {
-                                guard model.analysisOperation?.id == token else { return }
-                                model.detectedScreens.append(contentsOf: screens)
+                                guard model.acceptsAnalysis(session: session, attempt: currentAttempt) else { return }
+                                model.analysisAttemptID = nil
+                                model.analysisOutcome = .completed
+                                model.analysisOperation = nil
                             }
-                            try await captures.append(screens)
+                            return
+                        } catch {
+                            await captures.cancelAndDrain()
+                            if Task.isCancelled || error is CancellationError { throw CancellationError() }
+                            guard cached != nil else { throw error }
+                            let nextAttempt = UUID()
+                            let retry = await MainActor.run {
+                                guard model.acceptsAnalysis(session: session, attempt: currentAttempt) else { return false }
+                                model.analysisAttemptID = nextAttempt
+                                model.clearAnalysisCaptures()
+                                model.progress = AnalysisProgress(stage: .decoding, fraction: 0, detail: "Lecture de la vidéo")
+                                return true
+                            }
+                            guard retry else { return }
+                            attempt = nextAttempt
+                            cached = nil
+                            source = try await cache.fingerprint(for: videoURL)
                         }
-                    )
-                    let completed = try await captures.finish()
-                    let files = completed.map(\.fileURL)
-                    guard completed.map(\.id) == result.states.map(\.id) else {
-                        throw ScreenshotExportError.invalidImageSequence
-                    }
-                    await MainActor.run {
-                        guard model.analysisOperation?.id == token else { return }
-                        model.progress = AnalysisProgress(stage: .annotating, fraction: 0, detail: "Organisation des captures…")
-                    }
-                    try await beforeOrganization()
-                    let catalog = try await catalogAnalyzer.analyze(fileURLs: files, useFoundationModels: false,
-                                                                   preparedRecognition: preparedRecognition) { fraction, _ in
-                        await MainActor.run {
-                            guard model.analysisOperation?.id == token else { return }
-                            model.progress = AnalysisProgress(stage: .annotating, fraction: fraction, detail: "Organisation des captures…")
-                        }
-                    }
-                    await preparedRecognition.cancelAndDrain()
-                    let namedFiles = try ScreenshotExporter.prepareNamedFiles(files: files, screenNames: catalog.classifications.map(\.name))
-                    try Task.checkCancellation()
-                    await MainActor.run {
-                        guard model.analysisOperation?.id == token else { return }
-                        model.screenClassifications = Dictionary(uniqueKeysWithValues: zip(result.states, catalog.classifications).map { ($0.0.id, $0.1) })
-                        model.screenshots = zip(result.states, namedFiles).map {
-                            CapturedScreenshot(state: $0.0, fileURL: $0.1)
-                        }
-                        model.setUniqueScreens(model.showsUniqueScreens)
-                        model.analysisOutcome = .completed
-                        model.analysisOperation = nil
-                        if catalog.recognitionFailures > 0 {
-                            model.notice = "Analyse incomplète pour \(catalog.recognitionFailures) capture(s). Toutes les captures sont conservées."
-                        } else if catalog.errorDescription != nil {
-                            model.notice = catalog.visionNames > 0
-                                ? "Organisation partielle : \(catalog.visionNames) capture(s) nommée(s). Toutes les captures restent disponibles."
-                                : "L’organisation des captures n’a pas pu être terminée. Toutes les captures restent disponibles."
-                        }
-                        model.progress = AnalysisProgress(stage: .complete, fraction: 1, detail: "\(files.count) captures prêtes")
                     }
                 } catch {
                     await collector?.cancelAndDrain()
                     await preparedRecognition.cancelAndDrain()
-                    let cancelled = error is CancellationError
-                    let message = error.localizedDescription
+                    let cancelled = Task.isCancelled || error is CancellationError
+                    let failedAttempt = attempt
+                    let message = error is ReconstructionError
+                        ? "La vidéo a changé pendant l’analyse. Relancez l’analyse."
+                        : error.localizedDescription
                     await MainActor.run {
-                        guard model.analysisOperation?.id == token else { return }
+                        guard model.acceptsAnalysis(session: session, attempt: failedAttempt) else { return }
+                        model.analysisAttemptID = nil
+                        model.cachedContext = nil
                         model.analysisOutcome = cancelled ? .cancelled : .failed(message)
                         model.analysisOperation = nil
                         if cancelled {
@@ -358,28 +479,57 @@ public final class AppModel {
         }
     }
 
+    private nonisolated static func catalogWarning(_ catalog: ScreenCatalog) -> String? {
+        if catalog.recognitionFailures > 0 {
+            return "Analyse incomplète pour \(catalog.recognitionFailures) capture(s). Toutes les captures sont conservées."
+        }
+        if catalog.errorDescription != nil {
+            return catalog.visionNames > 0
+                ? "Organisation partielle : \(catalog.visionNames) capture(s) nommée(s). Toutes les captures restent disponibles."
+                : "L’organisation des captures n’a pas pu être terminée. Toutes les captures restent disponibles."
+        }
+        return nil
+    }
+
+    private func acceptsRefinement(session: UUID, request: UUID, ids: [UUID]) -> Bool {
+        sessionID == session && refinementOperation?.id == request && screenshots.map(\.id) == ids
+    }
+
     func refineScreens() {
-        guard !isAnalyzing, !screenshots.isEmpty, refinementOperation == nil else { return }
+        guard !isWorking, !screenshots.isEmpty, refinementDetail == nil else { return }
         let files = screenshots.map(\.fileURL)
         cancelRefinement()
         let ids = screenshots.map(\.id)
-        let analyzer = screenCatalogAnalyzer
-        let beforeOrganization = beforeOrganization
+        let session = sessionID
         let operation = RefinementOperation()
         refinementOperation = operation
         refinementOutcome = nil
-        let token = operation.id
+        let request = operation.id
+        let beforeOrganization = beforeOrganization
+        let context = cachedContext
+        let analyzer = screenCatalogAnalyzer
+        let cache = recentAnalysisCache
+        let refinement = refineCatalog
         refinementOperation?.task = Task { [weak self] in
             do {
                 try await beforeOrganization()
-                let catalog = try await analyzer.analyze(fileURLs: files) { fraction, _ in
-                    await MainActor.run {
-                        guard let self, self.refinementOperation?.id == token, self.screenshots.map(\.id) == ids, !Task.isCancelled else { return }
-                        self.refinementOperation?.detail = "Affinage des captures… \(fraction.formatted(.percent.precision(.fractionLength(0))))"
+                let catalog: ScreenCatalog
+                if let refinement {
+                    catalog = try await refinement(files)
+                } else {
+                    catalog = try await analyzer.analyze(fileURLs: files) { fraction, _ in
+                        await MainActor.run {
+                            guard let self, self.acceptsRefinement(session: session, request: request, ids: ids) else { return }
+                            self.refinementOperation?.detail = "Affinage des captures… \(fraction.formatted(.percent.precision(.fractionLength(0))))"
+                        }
                     }
                 }
                 try Task.checkCancellation()
-                guard let self, self.refinementOperation?.id == token, self.screenshots.map(\.id) == ids else { return }
+                if let context, try await cache.matches(context.source) == false {
+                    throw ReconstructionError.sourceChanged
+                }
+                try Task.checkCancellation()
+                guard let self, self.acceptsRefinement(session: session, request: request, ids: ids) else { return }
                 let namedFiles = try ScreenshotExporter.prepareNamedFiles(files: files, screenNames: catalog.classifications.map(\.name))
                 self.applyRefinement(classifications: catalog.classifications, files: namedFiles, expectedIDs: ids)
                 if catalog.recognitionFailures > 0 {
@@ -387,15 +537,20 @@ public final class AppModel {
                 } else if catalog.errorDescription != nil {
                     self.notice = "L’affinage des captures n’a pas pu être terminé. Les résultats locaux restent disponibles."
                 }
+                if catalog.recognitionFailures == 0, catalog.errorDescription == nil, let context,
+                   let snapshot = CachedAnalysis(result: context.result, catalog: catalog) {
+                    try await cache.store(snapshot, for: context.source)
+                }
+                guard self.acceptsRefinement(session: session, request: request, ids: ids) else { return }
                 self.refinementOutcome = .completed
                 self.refinementOperation = nil
             } catch {
-                guard let self, self.refinementOperation?.id == token else { return }
-                self.refinementOutcome = error is CancellationError || Task.isCancelled ? .cancelled : .failed(error.localizedDescription)
-                self.refinementOperation = nil
+                guard let self, self.acceptsRefinement(session: session, request: request, ids: ids) else { return }
                 if !(error is CancellationError) && !Task.isCancelled {
                     self.notice = "Affinage interrompu : \(error.localizedDescription). Les résultats locaux restent disponibles."
                 }
+                self.refinementOutcome = error is CancellationError || Task.isCancelled ? .cancelled : .failed(error.localizedDescription)
+                self.refinementOperation = nil
             }
         }
     }
@@ -615,6 +770,17 @@ public final class AppModel {
 
     func cancel() { analysisOperation?.task?.cancel() }
     func cancelSave() { saveOperation?.task?.cancel() }
+
+    func cleanUpSession() {
+        sessionID = UUID()
+        analysisAttemptID = nil
+        cachedContext = nil
+        analysisOperation?.task?.cancel()
+        saveOperation?.task?.cancel()
+        cancelRefinement()
+        if let stagingFolderURL { try? FileManager.default.removeItem(at: stagingFolderURL) }
+        stagingFolderURL = nil
+    }
 
     func showExportedFolder() {
         guard let exportedFolderURL else { return }
