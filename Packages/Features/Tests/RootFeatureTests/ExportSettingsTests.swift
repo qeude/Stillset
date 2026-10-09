@@ -65,48 +65,28 @@ struct ExportSettingsTests {
         #expect(reset.screenExportLayout == .singleFolder)
     }
 
-    @Test func defaultsApplyAtInitializationAndAcceptedImportOnly() async throws {
+    @Test func defaultsInitializeSessionOnceAndSettingsDoNotResetIt() {
         let (preferences, defaults, suite) = makePreferences()
         defer { defaults.removePersistentDomain(forName: suite) }
         preferences.captureDefault = .all
         preferences.organisationDefault = .byScreen
-        let model = AppModel(preferences: preferences)
-        #expect(!model.showsUniqueScreens && model.groupsTimelineByScreen)
-        populate(model, labels: [(1, "Compte", 1), (2, "Accueil", 2), (1, "Compte", 3)])
+        let model = makeModel(preferences)
+        populate(model, labels: [(1, "Compte", 1), (2, "Accueil", 2)])
         model.selectAll()
         let selection = model.selectedScreenshotIDs
         preferences.captureDefault = .uniques
         preferences.organisationDefault = .chronology
+        model.imports.enqueue([URL(fileURLWithPath: "/tmp/unsupported.txt")])
         #expect(!model.showsUniqueScreens && model.groupsTimelineByScreen)
-        #expect(model.selectedScreenshotIDs == selection && model.screenshots.count == 3)
-        model.setUniqueScreens(true)
-        model.setTimelineGrouping(false)
-        preferences.captureDefault = .all
-        preferences.organisationDefault = .byScreen
-        #expect(model.showsUniqueScreens && !model.groupsTimelineByScreen)
-        #expect(preferences.captureDefault == .all && preferences.organisationDefault == .byScreen)
-        model.importVideo(URL(fileURLWithPath: "/tmp/unsupported.txt"))
-        #expect(model.screenshots.count == 3 && model.selectedScreenshotIDs == selection)
-        model.importVideo(URL(fileURLWithPath: "/tmp/Stillset-missing-\(UUID()).mov"))
-        #expect(!model.showsUniqueScreens && model.groupsTimelineByScreen)
-        #expect(model.screenshots.isEmpty && model.selectedScreenshotIDs.isEmpty)
-        let acceptedURL = model.videoURL
-        model.importVideo(URL(fileURLWithPath: "/tmp/rejected-while-working.mov"))
-        #expect(model.videoURL == acceptedURL)
-        preferences.captureDefault = .uniques
-        preferences.organisationDefault = .chronology
-        #expect(!model.showsUniqueScreens && model.groupsTimelineByScreen)
-        model.cancel()
-        for _ in 0..<2_000 where model.isWorking {
-            try await Task.sleep(for: .milliseconds(1))
-        }
-        #expect(!model.isWorking)
+        #expect(model.selectedScreenshotIDs == selection && model.screenshots.count == 2)
+        let fresh = SessionModel(preferences: preferences)
+        #expect(fresh.showsUniqueScreens && !fresh.groupsTimelineByScreen)
     }
 
     @Test func exportProjectsExistingGroupRankAndChronologicalMembers() {
         let (preferences, defaults, suite) = makePreferences()
         defer { defaults.removePersistentDomain(forName: suite) }
-        let model = AppModel(preferences: preferences)
+        let model = makeModel(preferences)
         populate(model, labels: [(1, "Compte", 1), (2, "Accueil", 2), (1, "Compte", 3)])
         let files = model.screenshots.map(\.fileURL)
         model.selectScreenshot(model.screenshots[1].id, modifiers: [])
@@ -133,7 +113,7 @@ struct ExportSettingsTests {
     @Test func exportRetainsUnknownAndEqualNameGroupsAndRespectsVisibleRepeats() {
         let (preferences, defaults, suite) = makePreferences()
         defer { defaults.removePersistentDomain(forName: suite) }
-        let model = AppModel(preferences: preferences)
+        let model = makeModel(preferences)
         populate(model, labels: [(1, "Compte", 1), (2, "Compte", 2), (1, "Compte", 3),
                                  (1, "Compte", 1), nil, nil])
         let files = model.screenshots.map(\.fileURL)
@@ -163,7 +143,7 @@ struct ExportSettingsTests {
     @Test func exportPlanRemainsFrozenAcrossRefinementAndPreferenceChanges() {
         let (preferences, defaults, suite) = makePreferences()
         defer { defaults.removePersistentDomain(forName: suite) }
-        let model = AppModel(preferences: preferences)
+        let model = makeModel(preferences)
         populate(model, labels: [(1, "Compte", 1), (2, "Accueil", 2), (1, "Compte", 3)])
         model.setTimelineGrouping(true)
         model.selectAll()
@@ -174,16 +154,15 @@ struct ExportSettingsTests {
             .init(sourceURL: originalFiles[1], screenName: "Accueil")
         ])
         let snapshot = model.makeSelectionExportPlan()
-        let newFiles = originalFiles.map { $0.appendingPathExtension("refined.png") }
-        model.applyRefinement(classifications: (0..<3).map {
+        model.applyCatalog((0..<3).map {
             ScreenClassification(screenID: 3, name: "Profil", stateID: $0 + 1)
-        }, files: newFiles, expectedIDs: model.screenshots.map(\.id))
+        }, snapshot: model.catalogSnapshot, refined: true)
         preferences.screenExportLayout = .folders
         preferences.captureDefault = .all
         preferences.organisationDefault = .byScreen
         #expect(snapshot == expected)
         #expect(model.makeSelectionExportPlan() == .screenFolders([
-            .init(screenName: "Profil", sourceURLs: newFiles)
+            .init(screenName: "Profil", sourceURLs: originalFiles)
         ]))
         #expect(model.showsUniqueScreens && model.groupsTimelineByScreen)
     }
@@ -194,14 +173,19 @@ struct ExportSettingsTests {
         return (AppPreferences(defaults: defaults), defaults, suite)
     }
 
-    private func populate(_ model: AppModel, labels: [(Int, String, Int)?]) {
-        model.screenshots = labels.indices.map { index in
+    private func makeModel(_ preferences: AppPreferences) -> SessionModel {
+        SessionModel(preferences: preferences, imports: VideoImportQueue(models: [AppModel()]), catalogRunner: { _, _, _ in SessionCatalogResult(classifications: []) })
+    }
+
+    private func populate(_ model: SessionModel, labels: [(Int, String, Int)?]) {
+        let job = model.imports.models[0]
+        job.screenshots = labels.indices.map { index in
             CapturedScreenshot(state: UIState(interval: Double(index)..<Double(index + 1),
                 representativeTimestamp: Double(index), stabilityScore: 1),
                 fileURL: URL(fileURLWithPath: "/tmp/export-settings-\(index).png"))
         }
-        model.screenClassifications = Dictionary(uniqueKeysWithValues: labels.enumerated().compactMap { index, label in
-            label.map { (model.screenshots[index].id, ScreenClassification(screenID: $0.0, name: $0.1, stateID: $0.2)) }
+        job.screenClassifications = Dictionary(uniqueKeysWithValues: labels.enumerated().compactMap { index, label in
+            label.map { (job.screenshots[index].id, ScreenClassification(screenID: $0.0, name: $0.1, stateID: $0.2)) }
         })
     }
 }

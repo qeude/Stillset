@@ -9,7 +9,7 @@ public struct SettingsView: View {
 
     public var body: some View {
         Form {
-            Section {
+            Section("Par défaut pour la prochaine session") {
                 Picker("Captures", selection: $preferences.captureDefault) {
                     Text("Uniques").tag(AppPreferences.CaptureDefault.uniques)
                     Text("Toutes").tag(AppPreferences.CaptureDefault.all)

@@ -4,7 +4,7 @@ import Testing
 @testable import StillsetCore
 
 struct ExportPlanTests {
-    @Test func flatSaveUsesDenseSafeNamesAndIndependentOriginalBytes() throws {
+    @Test func flatSaveUsesDenseSafeNamesAndIndependentOriginalBytes() async throws {
         let root = try makeFolder()
         defer { try? FileManager.default.removeItem(at: root) }
         let output = try makeSubfolder("output", in: root)
@@ -17,7 +17,7 @@ struct ExportPlanTests {
             .init(sourceURL: first, screenName: String(repeating: "a", count: 90))
         ])
         let progress = Mutex<[Double]>([])
-        let copied = try ScreenshotExporter.copy(plan: plan, to: output) { fraction, _ in
+        let copied = try await ScreenshotExporter.copy(plan: plan, to: output) { fraction, _ in
             progress.withLock { $0.append(fraction) }
         }
         #expect(plan.fileCount == 4)
@@ -37,7 +37,7 @@ struct ExportPlanTests {
         #expect(try Data(contentsOf: copied[0]) == Data([4, 18, 32]))
     }
 
-    @Test func screenFoldersKeepDistinctEqualNamesSkipEmptyGroupsAndReportGlobalProgress() throws {
+    @Test func screenFoldersKeepDistinctEqualNamesSkipEmptyGroupsAndReportGlobalProgress() async throws {
         let root = try makeFolder()
         defer { try? FileManager.default.removeItem(at: root) }
         let output = try makeSubfolder("output", in: root)
@@ -50,7 +50,7 @@ struct ExportPlanTests {
             .init(screenName: "À identifier", sourceURLs: [b])
         ])
         let updates = Mutex<[(Double, String)]>([])
-        let copied = try ScreenshotExporter.copy(plan: plan, to: output) { fraction, detail in
+        let copied = try await ScreenshotExporter.copy(plan: plan, to: output) { fraction, detail in
             updates.withLock { $0.append((fraction, detail)) }
         }
         #expect(plan.fileCount == 4)
@@ -66,7 +66,7 @@ struct ExportPlanTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: output.path).sorted() == ["001_compte", "002_compte", "003_a-identifier"])
     }
 
-    @Test func flatCollisionsPreserveFilesFoldersAndDanglingSymlinks() throws {
+    @Test func flatCollisionsPreserveFilesFoldersAndDanglingSymlinks() async throws {
         let root = try makeFolder()
         defer { try? FileManager.default.removeItem(at: root) }
         let output = try makeSubfolder("output", in: root)
@@ -77,17 +77,17 @@ struct ExportPlanTests {
         let absent = root.appendingPathComponent("absent.png")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: absent)
         let plan = ScreenshotExportPlan.singleFolder([.init(sourceURL: input, screenName: "Compte")])
-        let copied = try ScreenshotExporter.copy(plan: plan, to: output)
+        let copied = try await ScreenshotExporter.copy(plan: plan, to: output)
         #expect(copied.map(\.lastPathComponent) == ["001_compte-4.png"])
         #expect(try Data(contentsOf: existing) == Data([42]))
         #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
         #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link.path) == absent.path)
         #expect(!FileManager.default.fileExists(atPath: absent.path))
-        #expect(try ScreenshotExporter.copy(plan: plan, to: output).map(\.lastPathComponent) == ["001_compte-5.png"])
+        #expect(try await ScreenshotExporter.copy(plan: plan, to: output).map(\.lastPathComponent) == ["001_compte-5.png"])
         #expect(try Data(contentsOf: input) == Data([7, 8]))
     }
 
-    @Test func folderCollisionsCreateFreshFoldersWithoutFollowingSymlinks() throws {
+    @Test func folderCollisionsCreateFreshFoldersWithoutFollowingSymlinks() async throws {
         let root = try makeFolder()
         defer { try? FileManager.default.removeItem(at: root) }
         let output = try makeSubfolder("output", in: root)
@@ -102,7 +102,7 @@ struct ExportPlanTests {
         let absent = root.appendingPathComponent("absent")
         try FileManager.default.createSymbolicLink(at: dangling, withDestinationURL: absent)
         let plan = ScreenshotExportPlan.screenFolders([.init(screenName: "Compte", sourceURLs: [input])])
-        let copied = try ScreenshotExporter.copy(plan: plan, to: output)
+        let copied = try await ScreenshotExporter.copy(plan: plan, to: output)
         #expect(copied[0].deletingLastPathComponent().lastPathComponent == "001_compte-5")
         #expect(try Data(contentsOf: copied[0]) == Data([7]))
         #expect(try Data(contentsOf: sentinel) == Data([42]))
@@ -111,10 +111,10 @@ struct ExportPlanTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: outside.path).isEmpty)
         #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link.path) == outside.path)
         #expect(try FileManager.default.destinationOfSymbolicLink(atPath: dangling.path) == absent.path)
-        #expect(try ScreenshotExporter.copy(plan: plan, to: output)[0].deletingLastPathComponent().lastPathComponent == "001_compte-6")
+        #expect(try await ScreenshotExporter.copy(plan: plan, to: output)[0].deletingLastPathComponent().lastPathComponent == "001_compte-6")
     }
 
-    @Test func missingSourcePropagatesAndLeavesCompletedCopies() throws {
+    @Test func missingSourcePropagatesAndLeavesCompletedCopies() async throws {
         let root = try makeFolder()
         defer { try? FileManager.default.removeItem(at: root) }
         let output = try makeSubfolder("output", in: root)
@@ -123,11 +123,11 @@ struct ExportPlanTests {
             .init(sourceURL: input, screenName: "Compte"),
             .init(sourceURL: root.appendingPathComponent("missing.png"), screenName: "Accueil")
         ])
-        #expect(throws: (any Error).self) { try ScreenshotExporter.copy(plan: plan, to: output) }
+        await #expect(throws: (any Error).self) { try await ScreenshotExporter.copy(plan: plan, to: output) }
         #expect(try FileManager.default.contentsOfDirectory(atPath: output.path) == ["001_compte.png"])
         #expect(try Data(contentsOf: output.appendingPathComponent("001_compte.png")) == Data([7]))
-        #expect(throws: (any Error).self) {
-            try ScreenshotExporter.copy(plan: .screenFolders([.init(screenName: "Compte", sourceURLs: [input])]),
+        await #expect(throws: (any Error).self) {
+            try await ScreenshotExporter.copy(plan: .screenFolders([.init(screenName: "Compte", sourceURLs: [input])]),
                                         to: root.appendingPathComponent("missing-parent"))
         }
     }
@@ -142,7 +142,7 @@ struct ExportPlanTests {
             .init(screenName: "Accueil", sourceURLs: [input])
         ])
         let task = Task.detached {
-            try ScreenshotExporter.copy(plan: plan, to: output) { _, _ in
+            try await ScreenshotExporter.copy(plan: plan, to: output) { _, _ in
                 withUnsafeCurrentTask { $0?.cancel() }
             }
         }
@@ -157,11 +157,11 @@ struct ExportPlanTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let output = try makeSubfolder("output", in: root)
         let input = try source("input.png", bytes: [7], in: root)
-        #expect(try ScreenshotExporter.copy(plan: .singleFolder([]), to: output).isEmpty)
-        #expect(try ScreenshotExporter.copy(plan: .screenFolders([.init(screenName: "Compte", sourceURLs: [])]), to: output).isEmpty)
+        #expect(try await ScreenshotExporter.copy(plan: .singleFolder([]), to: output).isEmpty)
+        #expect(try await ScreenshotExporter.copy(plan: .screenFolders([.init(screenName: "Compte", sourceURLs: [])]), to: output).isEmpty)
         let task = Task.detached {
             withUnsafeCurrentTask { $0?.cancel() }
-            return try ScreenshotExporter.copy(plan: .screenFolders([.init(screenName: "Compte", sourceURLs: [input])]), to: output)
+            return try await ScreenshotExporter.copy(plan: .screenFolders([.init(screenName: "Compte", sourceURLs: [input])]), to: output)
         }
         await #expect(throws: CancellationError.self) { try await task.value }
         #expect(try FileManager.default.contentsOfDirectory(atPath: output.path).isEmpty)

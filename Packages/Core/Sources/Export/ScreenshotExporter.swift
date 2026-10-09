@@ -7,67 +7,60 @@ import UniformTypeIdentifiers
 
 public enum ScreenshotExporter {
     /// Keep the streamed files valid for existing drags and clipboard references.
-    public static func prepareNamedFiles(files: [URL], screenNames: [String]) throws -> [URL] {
+    public static func prepareNamedFiles(
+        files: [URL], screenNames: [String], work: ProcessingLane = .standalone()
+    ) async throws -> [URL] {
         guard files.count == screenNames.count else { throw ScreenshotExportError.invalidNameCount }
         let width = max(3, String(files.count).count)
-        return try files.enumerated().map { index, file in
-            try Task.checkCancellation()
-            let name = numberedName(index: index, width: width, screenName: screenNames[index])
-            if file.lastPathComponent == name + ".png", FileManager.default.fileExists(atPath: file.path) { return file }
-            let destination = nonconflictingURL(folder: file.deletingLastPathComponent(), name: name)
-            do {
-                try FileManager.default.linkItem(at: file, to: destination)
-            } catch {
-                try FileManager.default.copyItem(at: file, to: destination)
+        var named: [URL] = []
+        for (index, file) in files.enumerated() {
+            let title = screenNames[index]
+            let destination = try await work.perform {
+                let name = numberedName(index: index, width: width, screenName: title)
+                if file.lastPathComponent == name + ".png", FileManager.default.fileExists(atPath: file.path) { return file }
+                let destination = nonconflictingURL(folder: file.deletingLastPathComponent(), name: name)
+                do { try FileManager.default.linkItem(at: file, to: destination) }
+                catch { try FileManager.default.copyItem(at: file, to: destination) }
+                return destination
             }
-            return destination
+            named.append(destination)
         }
+        return named
     }
 
     @discardableResult
     public static func copy(
         plan: ScreenshotExportPlan,
         to folderURL: URL,
-        onProgress: @Sendable (Double, String) -> Void = { _, _ in }
-    ) throws -> [URL] {
+        work: ProcessingLane = .standalone(),
+        onProgress: @Sendable (Double, String) async throws -> Void = { _, _ in }
+    ) async throws -> [URL] {
         let count = plan.fileCount
         var copied: [URL] = []
         copied.reserveCapacity(count)
-
-        func copySource(_ source: URL, to folder: URL, name: String) throws {
-            var suffix = 1
-            while true {
-                try Task.checkCancellation()
-                let component = suffix == 1 ? name : "\(name)-\(suffix)"
-                let destination = folder.appendingPathComponent("\(component).png")
-                do {
-                    try FileManager.default.copyItem(at: source, to: destination)
-                    copied.append(destination)
-                    onProgress(Double(copied.count) / Double(count), "Screenshot \(copied.count) of \(count)")
-                    return
-                } catch let error as NSError where error.domain == NSCocoaErrorDomain && error.code == NSFileWriteFileExistsError {
-                    suffix += 1
-                }
-            }
-        }
-
         switch plan {
         case .singleFolder(let entries):
             let width = max(3, String(count).count)
             for (index, entry) in entries.enumerated() {
-                try copySource(entry.sourceURL, to: folderURL,
-                               name: numberedName(index: index, width: width, screenName: entry.screenName))
+                let name = numberedName(index: index, width: width, screenName: entry.screenName)
+                let file = try await work.perform { try copySource(entry.sourceURL, to: folderURL, name: name) }
+                copied.append(file)
+                try await onProgress(Double(copied.count) / Double(count), "Screenshot \(copied.count) of \(count)")
             }
-        case .screenFolders(let groups):
-            let groups = groups.filter { !$0.sourceURLs.isEmpty }
+        case .screenFolders(let allGroups):
+            let groups = allGroups.filter { !$0.sourceURLs.isEmpty }
             let groupWidth = max(3, String(groups.count).count)
             for (index, group) in groups.enumerated() {
-                let folder = try createExportFolder(in: folderURL,
-                    name: numberedName(index: index, width: groupWidth, screenName: group.screenName))
+                let folder = try await work.perform {
+                    try createExportFolder(in: folderURL,
+                        name: numberedName(index: index, width: groupWidth, screenName: group.screenName))
+                }
                 let fileWidth = max(3, String(group.sourceURLs.count).count)
                 for (fileIndex, source) in group.sourceURLs.enumerated() {
-                    try copySource(source, to: folder,
-                                   name: numberedName(index: fileIndex, width: fileWidth, screenName: group.screenName))
+                    let name = numberedName(index: fileIndex, width: fileWidth, screenName: group.screenName)
+                    let file = try await work.perform { try copySource(source, to: folder, name: name) }
+                    copied.append(file)
+                    try await onProgress(Double(copied.count) / Double(count), "Screenshot \(copied.count) of \(count)")
                 }
             }
         }
@@ -75,45 +68,58 @@ public enum ScreenshotExporter {
         return copied
     }
 
+    private static func copySource(_ source: URL, to folder: URL, name: String) throws -> URL {
+        var suffix = 1
+        while true {
+            try Task.checkCancellation()
+            let component = suffix == 1 ? name : "\(name)-\(suffix)"
+            let destination = folder.appendingPathComponent("\(component).png")
+            do {
+                try FileManager.default.copyItem(at: source, to: destination)
+                return destination
+            } catch let error as NSError where error.domain == NSCocoaErrorDomain && error.code == NSFileWriteFileExistsError {
+                suffix += 1
+            }
+        }
+    }
+
     @discardableResult
     public static func copy(
-        files: [URL],
-        to folderURL: URL,
-        onProgress: @Sendable (Double, String) -> Void = { _, _ in }
-    ) throws -> [URL] {
+        files: [URL], to folderURL: URL, work: ProcessingLane = .standalone(),
+        onProgress: @Sendable (Double, String) async throws -> Void = { _, _ in }
+    ) async throws -> [URL] {
         var copied: [URL] = []
-        copied.reserveCapacity(files.count)
-
-        for (index, fileURL) in files.enumerated() {
-            try Task.checkCancellation()
-            let destinationURL = nonconflictingURL(
-                folder: folderURL,
-                name: fileURL.deletingPathExtension().lastPathComponent
-            )
-            try FileManager.default.copyItem(at: fileURL, to: destinationURL)
-            copied.append(destinationURL)
-            onProgress(Double(index + 1) / Double(files.count), "Screenshot \(index + 1) of \(files.count)")
+        for (index, file) in files.enumerated() {
+            let destination = try await work.perform {
+                let destination = nonconflictingURL(folder: folderURL, name: file.deletingPathExtension().lastPathComponent)
+                try FileManager.default.copyItem(at: file, to: destination)
+                return destination
+            }
+            copied.append(destination)
+            try await onProgress(Double(index + 1) / Double(files.count), "Screenshot \(index + 1) of \(files.count)")
         }
+        try Task.checkCancellation()
         return copied
     }
 
     @discardableResult
     public static func export(
-        states: [UIState],
-        from videoURL: URL,
-        to folderURL: URL,
+        states: [UIState], from videoURL: URL, to folderURL: URL,
         startingIndex: Int = 0,
-        onProgress: @escaping @Sendable (Double, String) -> Void = { _, _ in },
-        onScreenshot: @escaping @Sendable (Int, URL) async -> Void = { _, _ in }
+        work: ProcessingLane = .standalone(),
+        onProgress: @escaping @Sendable (Double, String) async throws -> Void = { _, _ in },
+        onScreenshot: @escaping @Sendable (Int, URL) async throws -> Void = { _, _ in }
     ) async throws -> [URL] {
-        try await exportOriginals(states: states, from: videoURL, to: folderURL, startingIndex: startingIndex,
+        try await exportOriginals(states: states, from: videoURL, to: folderURL,
+                                  startingIndex: startingIndex, work: work,
                                   onProgress: onProgress, onScreenshot: onScreenshot, encode: writePNG)
     }
 
     static func exportOriginals(
         states: [UIState], from videoURL: URL, to folderURL: URL, startingIndex: Int = 0,
-        onProgress: @escaping @Sendable (Double, String) -> Void = { _, _ in },
-        onScreenshot: @escaping @Sendable (Int, URL) async -> Void = { _, _ in },
+        work: ProcessingLane? = nil,
+        onProgress: @escaping @Sendable (Double, String) async throws -> Void = { _, _ in },
+        onScreenshot: @escaping @Sendable (Int, URL) async throws -> Void = { _, _ in },
         encode: @escaping @Sendable (CGImage, URL) async throws -> Void
     ) async throws -> [URL] {
         let asset = AVURLAsset(url: videoURL)
@@ -131,8 +137,9 @@ public enum ScreenshotExporter {
             for start in stride(from: 0, to: states.count, by: 4) {
                 try Task.checkCancellation()
                 let indices = Array(start..<min(start + 4, states.count))
-                try await withThrowingTaskGroup(of: (Int, URL).self) { group in
+                let decode: @Sendable () async throws -> [(Int, CGImage)] = {
                     var remaining = indices
+                    var decoded: [(Int, CGImage)] = []
                     let images = generator.withLock { $0.images(for: indices.map { times[$0] }) }
                     for await result in images {
                         try Task.checkCancellation()
@@ -140,17 +147,26 @@ public enum ScreenshotExporter {
                         guard let position = remaining.firstIndex(where: { CMTimeCompare(times[$0], result.requestedTime) == 0 }) else {
                             throw ScreenshotExportError.invalidImageSequence
                         }
-                        let index = remaining.remove(at: position)
+                        decoded.append((remaining.remove(at: position), image))
+                    }
+                    try Task.checkCancellation()
+                    guard remaining.isEmpty else { throw ScreenshotExportError.invalidImageSequence }
+                    return decoded
+                }
+                let decoded: [(Int, CGImage)]
+                if let work { decoded = try await work.perform(decode) }
+                else { decoded = try await decode() }
+                try await withThrowingTaskGroup(of: (Int, URL).self) { group in
+                    for (index, image) in decoded {
                         let baseName = String(format: "%03d_%@", startingIndex + index + 1,
                                               timestampName(states[index].representativeTimestamp))
                         let destinationURL = nonconflictingURL(folder: folderURL, name: baseName)
                         group.addTask {
-                            try await encode(image, destinationURL)
+                            if let work { try await work.perform { try await encode(image, destinationURL) } }
+                            else { try await encode(image, destinationURL) }
                             return (index, destinationURL)
                         }
                     }
-                    try Task.checkCancellation()
-                    guard remaining.isEmpty else { throw ScreenshotExportError.invalidImageSequence }
                     var ready: [Int: URL] = [:]
                     var next = start
                     while let (index, url) = try await group.next() {
@@ -159,13 +175,15 @@ public enum ScreenshotExporter {
                         while let url = ready.removeValue(forKey: next) {
                             try Task.checkCancellation()
                             outputURLs.append(url)
-                            await onScreenshot(next, url)
-                            onProgress(Double(next + 1) / Double(states.count), "Screenshot \(next + 1) of \(states.count)")
+                            try await onScreenshot(next, url)
+                            try await onProgress(Double(next + 1) / Double(states.count), "Screenshot \(next + 1) of \(states.count)")
+                            try Task.checkCancellation()
                             next += 1
                         }
                     }
                 }
             }
+            try Task.checkCancellation()
             return outputURLs
         } onCancel: { generator.withLock { $0.cancelAllCGImageGeneration() } }
     }
@@ -173,7 +191,7 @@ public enum ScreenshotExporter {
     static func writePNG(_ image: CGImage, to url: URL) async throws {
         try Task.checkCancellation()
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            DispatchQueue.global(qos: .userInitiated).async {
+            DispatchQueue.global(qos: .utility).async {
                 guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
                     continuation.resume(throwing: ScreenshotExportError.cannotCreateFile(url))
                     return

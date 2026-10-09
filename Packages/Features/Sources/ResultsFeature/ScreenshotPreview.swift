@@ -4,10 +4,15 @@ import SwiftUI
 struct ScreenshotPreview: View {
     let url: URL
     let maxPixelSize: Int
-    var occurrenceID: UUID? = nil
+    var occurrenceID: OccurrenceID? = nil
     var animatesCaptureArrival = false
     var showsLoadingIndicator = true
     var previewReduceMotion = false
+    var requiresScrollVisibility = false
+    var demandPriority = 0
+    @Environment(\.thumbnailLoader) private var loader
+    @State private var consumerID = UUID()
+    @State private var scrollVisible = false
 
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @State private var loadedImage: LoadedImage?
@@ -17,7 +22,7 @@ struct ScreenshotPreview: View {
     }
 
     private struct LoadedImage {
-        let occurrenceID: UUID?
+        let occurrenceID: OccurrenceID?
         let image: CGImage
     }
 
@@ -28,22 +33,33 @@ struct ScreenshotPreview: View {
                 value: loadedImage?.occurrenceID
             )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task(id: url) {
-            let sourceURL = url
-            let pixelSize = maxPixelSize
-            let imageID = occurrenceID
-            let loadedImage: CGImage? = await Task.detached(priority: .utility) { () -> CGImage? in
-                guard let source = CGImageSourceCreateWithURL(sourceURL as CFURL, [
-                    kCGImageSourceShouldCache: false
-                ] as CFDictionary) else { return nil }
-                return CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                    kCGImageSourceCreateThumbnailFromImageAlways: true,
-                    kCGImageSourceThumbnailMaxPixelSize: pixelSize
-                ] as CFDictionary)
-            }.value
-            guard !Task.isCancelled else { return }
-            guard let loadedImage else { return }
-            self.loadedImage = LoadedImage(occurrenceID: imageID, image: loadedImage)
+        .onScrollVisibilityChange(threshold: 0.01) { visible in
+            guard requiresScrollVisibility else { return }
+            scrollVisible = visible
+            updateDemand()
+        }
+        .onAppear { if !requiresScrollVisibility { updateDemand() } }
+        .onChange(of: url) { updateDemand() }
+        .onChange(of: maxPixelSize) { updateDemand() }
+        .onChange(of: occurrenceID) { updateDemand() }
+        .onDisappear {
+            loader?.cancel(consumerID)
+            if requiresScrollVisibility, loadedImage != nil { processingSignposter.emitEvent("TimelineImageRelease") }
+            loadedImage = nil
+            scrollVisible = false
+        }
+    }
+
+    private func updateDemand() {
+        guard !requiresScrollVisibility || scrollVisible else {
+            loader?.cancel(consumerID)
+            return
+        }
+        let key = ThumbnailKey(url: url, maximumPixels: maxPixelSize, captureStateID: occurrenceID?.stateID)
+        loader?.demand(key, consumer: consumerID, priority: demandPriority) { image in
+            guard let image else { return }
+            loadedImage = LoadedImage(occurrenceID: occurrenceID, image: image)
+            if requiresScrollVisibility { processingSignposter.emitEvent("TimelineImageInstall") }
         }
     }
 
