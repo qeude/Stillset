@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import ImageIO
 import OSLog
+import Synchronization
 
 public struct ScreenClassification: Sendable, Equatable {
     public let screenID: Int
@@ -32,34 +33,178 @@ public actor ScreenCatalogAnalyzer {
     private var previousSources: [Int] = []
     private var previousNames: [Int: ScreenNameResult] = [:]
     private var comparisons: [Set<SHA256.Digest>: Bool] = [:]
+    private var completeEvidence: [SHA256.Digest: Evidence] = [:]
 
-    public init() {}
+    struct Evidence: Sendable {
+        let comparisonPixels: [UInt8]
+        let recognition: ScreenVisionFallback.Recognition?
+    }
+
+    typealias Thumbnail = @Sendable (Data) throws -> CGImage
+    typealias Recognition = @Sendable (Data, CGImage) async throws -> ScreenVisionFallback.Recognition
+
+    nonisolated static func extractEvidence(_ data: Data, thumbnail: Thumbnail, recognize: Recognition) async throws -> Evidence {
+        try Task.checkCancellation()
+        let image = try thumbnail(data)
+        let pixels = try comparisonPixels(image)
+        do {
+            let recognition = try await recognize(data, image)
+            try Task.checkCancellation()
+            return Evidence(comparisonPixels: pixels, recognition: recognition)
+        } catch is CancellationError { throw CancellationError() }
+        catch { return Evidence(comparisonPixels: pixels, recognition: nil) }
+    }
+
+    /// One import's first PNG recognition. Cancellation is terminal, including before start.
+    public final class PreparedRecognition: Sendable {
+        private enum State {
+            case idle
+            case pending(SHA256.Digest?, Task<Evidence, Error>)
+            case cancelled(Task<Evidence, Error>?)
+        }
+
+        private let state = Mutex<State>(.idle)
+        private let recognize: Recognition
+        private let thumbnail: Thumbnail
+
+        public init() {
+            recognize = { _, image in try await ScreenVisionFallback.recognize(image) }
+            thumbnail = ScreenCatalogAnalyzer.proxyImage
+        }
+
+        init(recognize: @escaping @Sendable (Data) async throws -> ScreenVisionFallback.Recognition) {
+            self.recognize = { data, _ in try await recognize(data) }
+            thumbnail = ScreenCatalogAnalyzer.proxyImage
+        }
+
+        init(recognizeImage: @escaping Recognition, thumbnail: @escaping Thumbnail = ScreenCatalogAnalyzer.proxyImage) {
+            recognize = recognizeImage
+            self.thumbnail = thumbnail
+        }
+
+        /// Starts at most once, using an immutable snapshot of the exported PNG.
+        public func start(fileURL: URL) {
+            state.withLock { state in
+                guard case .idle = state else { return }
+                guard !Task.isCancelled else { state = .cancelled(nil); return }
+                let snapshot = Result { try Data(contentsOf: fileURL) }
+                let digest = try? snapshot.map { SHA256.hash(data: $0) }.get()
+                let recognize = recognize
+                let thumbnail = thumbnail
+                state = .pending(digest, Task.detached(priority: .userInitiated) {
+                    try Task.checkCancellation()
+                    return try await ScreenCatalogAnalyzer.extractEvidence(snapshot.get(), thumbnail: thumbnail, recognize: recognize)
+                })
+            }
+        }
+
+        public func cancel() {
+            state.withLock { state in
+                if case let .pending(_, task) = state {
+                    task.cancel()
+                    state = .cancelled(task)
+                } else if case .idle = state { state = .cancelled(nil) }
+            }
+        }
+
+        public func cancelAndDrain() async {
+            cancel()
+            let task = state.withLock { state in
+                if case let .cancelled(task) = state { return task }
+                return nil
+            }
+            if let task { _ = await task.result }
+        }
+
+        fileprivate func task(matching digest: SHA256.Digest?) async throws -> Task<Evidence, Error>? {
+            let (task, matches) = try state.withLock { state -> (Task<Evidence, Error>?, Bool) in
+                switch state {
+                case .idle: return (nil, false)
+                case .cancelled: throw CancellationError()
+                case let .pending(preparedDigest, task):
+                    if let digest, digest == preparedDigest { return (task, true) }
+                    task.cancel()
+                    state = .cancelled(task)
+                    return (task, false)
+                }
+            }
+            if matches { return task }
+            if let task { _ = await task.result }
+            try Task.checkCancellation()
+            return nil
+        }
+    }
+
+    private let recognize: Recognition
+    private let thumbnail: Thumbnail
+
+    public init() {
+        recognize = { _, image in try await ScreenVisionFallback.recognize(image) }
+        thumbnail = Self.proxyImage
+    }
+
+    init(recognize: @escaping @Sendable (Data) async throws -> ScreenVisionFallback.Recognition) {
+        self.recognize = { data, _ in try await recognize(data) }
+        thumbnail = Self.proxyImage
+    }
+
+    init(recognizeImage: @escaping Recognition, thumbnail: @escaping Thumbnail = ScreenCatalogAnalyzer.proxyImage) {
+        recognize = recognizeImage
+        self.thumbnail = thumbnail
+    }
 
     public func analyze(
         fileURLs: [URL], useContextualNaming: Bool = true, useFoundationModels: Bool = true,
+        preparedRecognition: PreparedRecognition? = nil,
         onProgress: @Sendable (Double, String) async -> Void = { _, _ in }
     ) async throws -> ScreenCatalog {
+        try await withTaskCancellationHandler {
+            do {
+                let result = try await catalog(fileURLs: fileURLs, useContextualNaming: useContextualNaming,
+                                               useFoundationModels: useFoundationModels,
+                                               preparedRecognition: preparedRecognition, onProgress: onProgress)
+                await preparedRecognition?.cancelAndDrain()
+                try Task.checkCancellation()
+                return result
+            } catch {
+                await preparedRecognition?.cancelAndDrain()
+                throw error
+            }
+        } onCancel: { preparedRecognition?.cancel() }
+    }
+
+    private func catalog(
+        fileURLs: [URL], useContextualNaming: Bool, useFoundationModels: Bool,
+        preparedRecognition: PreparedRecognition?, onProgress: @Sendable (Double, String) async -> Void
+    ) async throws -> ScreenCatalog {
+        try Task.checkCancellation()
+        var fileDigests: [SHA256.Digest?] = []
+        var firstDigest: SHA256.Digest?
         var digests: [SHA256.Digest] = []
         var firstByDigest: [SHA256.Digest: Int] = [:]
         var sources: [Int] = []
         var failures: Set<Int> = []
         for (index, url) in fileURLs.enumerated() {
             try Task.checkCancellation()
-            let digest = (try? Data(contentsOf: url, options: .mappedIfSafe)).map { SHA256.hash(data: $0) }
+            let data = try? Data(contentsOf: url)
+            let digest = data.map { SHA256.hash(data: $0) }
+            if index == 0 { firstDigest = digest }
             if let digest { digests.append(digest) } else { failures.insert(index) }
             let source = digest.flatMap { firstByDigest[$0] } ?? index
+            fileDigests.append(digest)
             sources.append(source)
             if let digest, source == index { firstByDigest[digest] = index }
         }
         let matchesPrevious = digests.count == fileURLs.count && digests == previousDigests
             && useContextualNaming == previousContextualNaming
             && useFoundationModels == previousFoundationModels
-        if matchesPrevious, let previousCatalog,
-           previousCatalog.recognitionFailures == 0, previousCatalog.errorDescription == nil {
+        let cached = matchesPrevious && previousCatalog?.recognitionFailures == 0 && previousCatalog?.errorDescription == nil
+        let needsPrepared = useContextualNaming && !cached && firstDigest.map { completeEvidence[$0] == nil } == true
+        let preparedTask = try await preparedRecognition?.task(matching: needsPrepared ? firstDigest : nil)
+        if cached, let previousCatalog {
             await onProgress(1, "Résultats réutilisés")
             return previousCatalog
         }
-        if matchesPrevious { sources = previousSources }
         var savedSources = sources
         var savedNames: [Int: ScreenNameResult] = [:]
         var labels = sources.map { ScreenClassification(screenID: $0 + 1, name: "Capture à examiner") }
@@ -70,20 +215,35 @@ public actor ScreenCatalogAnalyzer {
             var stateSources = sources
             var recognition: [Int: ScreenVisionFallback.Recognition] = [:]
             let pendingOCR = fileURLs.indices.filter { sources[$0] == $0 }
-            let readings = try await Self.concurrentMap(pendingOCR, operation: { index -> (Int, [UInt8]?, ScreenVisionFallback.Recognition?) in
-                let pixels = try? Self.comparisonPixels(fileURLs[index])
-                do { return (index, pixels, try await ScreenVisionFallback.recognize(fileURLs[index])) }
+            let cachedEvidence = completeEvidence
+            let fileDigests = fileDigests
+            let recognize = recognize
+            let thumbnail = thumbnail
+            let readings = try await Self.concurrentMap(pendingOCR, operation: { index -> (Int, Evidence?) in
+                do {
+                    if let digest = fileDigests[index], let evidence = cachedEvidence[digest] { return (index, evidence) }
+                    let evidence: Evidence
+                    if index == 0, let preparedTask { evidence = try await preparedTask.value }
+                    else {
+                        let data = try Data(contentsOf: fileURLs[index])
+                        guard SHA256.hash(data: data) == fileDigests[index] else { throw CocoaError(.fileReadUnknown) }
+                        evidence = try await Self.extractEvidence(data, thumbnail: thumbnail, recognize: recognize)
+                    }
+                    try Task.checkCancellation()
+                    if let digest = fileDigests[index] { await self.remember(evidence, for: digest) }
+                    return (index, evidence)
+                }
                 catch is CancellationError { throw CancellationError() }
-                catch { return (index, pixels, nil) } // Unreadable OCR still gets image analysis.
+                catch { return (index, nil) }
             }) { count in
                 await onProgress(Double(count) / Double(pendingOCR.count) * 0.1, "Lecture des écrans avec Vision")
             }
             var samples = [[UInt8]?](repeating: nil, count: fileURLs.count)
-            for (index, pixels, value) in readings {
-                samples[index] = pixels
-                recognition[index] = value
+            for (index, evidence) in readings {
+                samples[index] = evidence?.comparisonPixels
+                recognition[index] = evidence?.recognition
             }
-            let needsModelNames = pendingOCR.contains { recognition[$0]?.fastName == nil && !(matchesPrevious && previousNames[$0] != nil) }
+            let needsModelNames = pendingOCR.contains { recognition[$0]?.fastName == nil }
             let preparedSessions = useFoundationModels && needsModelNames && ScreenSemanticNamer.isAvailable
                 ? (0..<2).map { _ in ScreenSemanticNamer.makeSession() } : []
             for session in preparedSessions { session.prewarm() }
@@ -131,7 +291,7 @@ public actor ScreenCatalogAnalyzer {
             }
             savedSources = stateSources
             let names = try await ScreenSemanticNamer.classify(
-                fileURLs: fileURLs, sources: stateSources, cachedNames: matchesPrevious ? previousNames : [:],
+                fileURLs: fileURLs, sources: stateSources, cachedNames: matchesPrevious && stateSources == previousSources ? previousNames : [:],
                 recognition: recognition, preparedSessions: preparedSessions, useFoundationModels: useFoundationModels
             ) { fraction, detail in
                 await onProgress(0.4 + fraction * 0.6, detail)
@@ -170,6 +330,10 @@ public actor ScreenCatalogAnalyzer {
         }
         await onProgress(1, "Captures prêtes")
         return catalog
+    }
+
+    private func remember(_ evidence: Evidence, for digest: SHA256.Digest) {
+        if evidence.recognition != nil { completeEvidence[digest] = evidence }
     }
 
     func cachedComparison(
@@ -222,7 +386,14 @@ public actor ScreenCatalogAnalyzer {
     }
 
     nonisolated static func comparisonPixels(_ url: URL) throws -> [UInt8] {
-        let image = try proxyImage(url)
+        try comparisonPixels(Data(contentsOf: url))
+    }
+
+    nonisolated static func comparisonPixels(_ data: Data) throws -> [UInt8] {
+        try comparisonPixels(proxyImage(data))
+    }
+
+    nonisolated static func comparisonPixels(_ image: CGImage) throws -> [UInt8] {
         var pixels = [UInt8](repeating: 0, count: 32 * 64)
         try pixels.withUnsafeMutableBytes { bytes in
             guard let context = CGContext(data: bytes.baseAddress, width: 32, height: 64,
@@ -236,7 +407,11 @@ public actor ScreenCatalogAnalyzer {
     }
 
     nonisolated static func proxyImage(_ url: URL) throws -> CGImage {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+        try proxyImage(Data(contentsOf: url))
+    }
+
+    nonisolated static func proxyImage(_ data: Data) throws -> CGImage {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,

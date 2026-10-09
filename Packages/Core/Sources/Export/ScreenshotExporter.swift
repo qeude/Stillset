@@ -2,6 +2,7 @@ import AVFoundation
 import Darwin
 import Foundation
 import ImageIO
+import Synchronization
 import UniformTypeIdentifiers
 
 public enum ScreenshotExporter {
@@ -101,56 +102,75 @@ public enum ScreenshotExporter {
         states: [UIState],
         from videoURL: URL,
         to folderURL: URL,
-        onProgress: @Sendable (Double, String) -> Void = { _, _ in },
-        onScreenshot: @Sendable (Int, URL) async -> Void = { _, _ in }
+        startingIndex: Int = 0,
+        onProgress: @escaping @Sendable (Double, String) -> Void = { _, _ in },
+        onScreenshot: @escaping @Sendable (Int, URL) async -> Void = { _, _ in }
     ) async throws -> [URL] {
-        let asset = AVURLAsset(url: videoURL)
-        let generator = AVAssetImageGenerator(asset: asset)
-        generator.appliesPreferredTrackTransform = true
-        generator.requestedTimeToleranceBefore = .zero
-        generator.requestedTimeToleranceAfter = .zero
-        var outputURLs: [URL] = []
-        outputURLs.reserveCapacity(states.count)
-
-        defer { generator.cancelAllCGImageGeneration() }
-        let times = states.map { CMTime(seconds: $0.representativeTimestamp, preferredTimescale: 600) }
-        // Native batch decoding reuses video work; four originals bound encoding memory.
-        for start in stride(from: 0, to: states.count, by: 4) {
-            try Task.checkCancellation()
-            let indices = Array(start..<min(start + 4, states.count))
-            let completed = try await withThrowingTaskGroup(of: (Int, URL).self) { group in
-                var remaining = indices
-                for await result in generator.images(for: indices.map { times[$0] }) {
-                    try Task.checkCancellation()
-                    let image = try result.image
-                    guard let position = remaining.firstIndex(where: { CMTimeCompare(times[$0], result.requestedTime) == 0 }) else {
-                        throw ScreenshotExportError.invalidImageSequence
-                    }
-                    let index = remaining.remove(at: position)
-                    let baseName = String(format: "%03d_%@", index + 1, timestampName(states[index].representativeTimestamp))
-                    let destinationURL = nonconflictingURL(folder: folderURL, name: baseName)
-                    group.addTask {
-                        try await writePNG(image, to: destinationURL)
-                        return (index, destinationURL)
-                    }
-                }
-                try Task.checkCancellation()
-                guard remaining.isEmpty else { throw ScreenshotExportError.invalidImageSequence }
-                var files: [(Int, URL)] = []
-                for try await file in group { files.append(file) }
-                return files.sorted { $0.0 < $1.0 }
-            }
-            for (index, url) in completed {
-                try Task.checkCancellation()
-                outputURLs.append(url)
-                await onScreenshot(index, url)
-                onProgress(Double(index + 1) / Double(states.count), "Screenshot \(index + 1) of \(states.count)")
-            }
-        }
-        return outputURLs
+        try await exportOriginals(states: states, from: videoURL, to: folderURL, startingIndex: startingIndex,
+                                  onProgress: onProgress, onScreenshot: onScreenshot, encode: writePNG)
     }
 
-    private static func writePNG(_ image: CGImage, to url: URL) async throws {
+    static func exportOriginals(
+        states: [UIState], from videoURL: URL, to folderURL: URL, startingIndex: Int = 0,
+        onProgress: @escaping @Sendable (Double, String) -> Void = { _, _ in },
+        onScreenshot: @escaping @Sendable (Int, URL) async -> Void = { _, _ in },
+        encode: @escaping @Sendable (CGImage, URL) async throws -> Void
+    ) async throws -> [URL] {
+        let asset = AVURLAsset(url: videoURL)
+        let generator = Mutex(AVAssetImageGenerator(asset: asset))
+        generator.withLock {
+            $0.appliesPreferredTrackTransform = true
+            $0.requestedTimeToleranceBefore = .zero
+            $0.requestedTimeToleranceAfter = .zero
+        }
+        defer { generator.withLock { $0.cancelAllCGImageGeneration() } }
+        return try await withTaskCancellationHandler {
+            var outputURLs: [URL] = []
+            outputURLs.reserveCapacity(states.count)
+            let times = states.map { CMTime(seconds: $0.representativeTimestamp, preferredTimescale: 600) }
+            for start in stride(from: 0, to: states.count, by: 4) {
+                try Task.checkCancellation()
+                let indices = Array(start..<min(start + 4, states.count))
+                try await withThrowingTaskGroup(of: (Int, URL).self) { group in
+                    var remaining = indices
+                    let images = generator.withLock { $0.images(for: indices.map { times[$0] }) }
+                    for await result in images {
+                        try Task.checkCancellation()
+                        let image = try result.image
+                        guard let position = remaining.firstIndex(where: { CMTimeCompare(times[$0], result.requestedTime) == 0 }) else {
+                            throw ScreenshotExportError.invalidImageSequence
+                        }
+                        let index = remaining.remove(at: position)
+                        let baseName = String(format: "%03d_%@", startingIndex + index + 1,
+                                              timestampName(states[index].representativeTimestamp))
+                        let destinationURL = nonconflictingURL(folder: folderURL, name: baseName)
+                        group.addTask {
+                            try await encode(image, destinationURL)
+                            return (index, destinationURL)
+                        }
+                    }
+                    try Task.checkCancellation()
+                    guard remaining.isEmpty else { throw ScreenshotExportError.invalidImageSequence }
+                    var ready: [Int: URL] = [:]
+                    var next = start
+                    while let (index, url) = try await group.next() {
+                        try Task.checkCancellation()
+                        ready[index] = url
+                        while let url = ready.removeValue(forKey: next) {
+                            try Task.checkCancellation()
+                            outputURLs.append(url)
+                            await onScreenshot(next, url)
+                            onProgress(Double(next + 1) / Double(states.count), "Screenshot \(next + 1) of \(states.count)")
+                            next += 1
+                        }
+                    }
+                }
+            }
+            return outputURLs
+        } onCancel: { generator.withLock { $0.cancelAllCGImageGeneration() } }
+    }
+
+    static func writePNG(_ image: CGImage, to url: URL) async throws {
         try Task.checkCancellation()
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {

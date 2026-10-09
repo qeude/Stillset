@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Vision
 
 /// Local foreground evidence resolves clear cases before invoking the language model.
@@ -140,62 +141,84 @@ enum ScreenVisionFallback {
 
     static func recognize(_ url: URL) async throws -> Recognition {
         try Task.checkCancellation()
-        let recognition: Recognition = try await withCheckedThrowingContinuation { continuation in
-            // Vision waits on internal queues; keep synchronous work off Swift's cooperative executor.
-            DispatchQueue.global(qos: .userInitiated).async {
-                do {
-                    let image = try ScreenCatalogAnalyzer.proxyImage(url)
-                    let request = VNRecognizeTextRequest()
-                    request.recognitionLevel = .accurate
-                    request.recognitionLanguages = ["fr-FR", "en-US"]
-                    request.usesLanguageCorrection = false
-                    try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
-                    let lines = (request.results ?? []).filter {
-                        $0.boundingBox.maxY <= 0.94 && ($0.topCandidates(1).first?.confidence ?? 0) >= 0.3
-                    }.sorted {
-                        let row = Int($0.boundingBox.midY * 60)
-                        let otherRow = Int($1.boundingBox.midY * 60)
-                        return row == otherRow ? $0.boundingBox.minX < $1.boundingBox.minX : row > otherRow
-                    }
-                    let titles = lines.filter {
-                        $0.boundingBox.width >= 0.12
-                            && ($0.topCandidates(1).first?.string.contains(where: \.isLetter) ?? false)
-                            && ($0.topCandidates(1).first?.string.count ?? 0) <= 80
-                    }
-                    let page = titles.first { $0.boundingBox.midY >= 0.65 }
-                    // ponytail: centered, bright header over a dimmed page identifies common bottom sheets.
-                    // Other overlay layouts need a broader labelled corpus before extending this heuristic.
-                    let pageBrightness = page.map { brightness(image, $0.boundingBox) } ?? 255
-                    let sheet = titles.first {
-                        (0.2...0.75).contains($0.boundingBox.midY)
-                            && abs($0.boundingBox.midX - 0.5) <= 0.1
-                            && brightness(image, $0.boundingBox) > pageBrightness + 45
-                    }
-                    let title = sheet ?? page ?? titles.first
-                    let titleText = title?.topCandidates(1).first?.string
-                    // ponytail: only a bright sheet with multiple numeric options skips the model.
-                    // Forms and ambiguous headings keep image analysis; expand with labelled fixtures.
-                    let recognizedLines = lines.compactMap { line in
-                        line.topCandidates(1).first.map {
-                            TextLine(text: $0.string, box: line.boundingBox, confidence: $0.confidence,
-                                rowPixels: pixels(image, box: CGRect(x: 0.02, y: max(0, line.boundingBox.midY - 0.03),
-                                    width: 0.93, height: min(0.06, 1 - max(0, line.boundingBox.midY - 0.03))), width: 128, height: 24))
+        return try await recognize(Data(contentsOf: url))
+    }
+
+    static func recognize(_ data: Data) async throws -> Recognition {
+        try Task.checkCancellation()
+        return try await recognize(ScreenCatalogAnalyzer.proxyImage(data))
+    }
+
+    static func recognize(_ image: CGImage) async throws -> Recognition {
+        try Task.checkCancellation()
+        let requestState = Mutex<(cancelled: Bool, request: VNRecognizeTextRequest?)>((false, nil))
+        let recognition: Recognition = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                // Vision waits on internal queues; keep synchronous work off Swift's cooperative executor.
+                DispatchQueue.global(qos: .userInitiated).async {
+                    do {
+                        let request = VNRecognizeTextRequest()
+                        let cancelled = requestState.withLock { state in
+                            if state.cancelled { return true }
+                            state.request = request
+                            return false
                         }
+                        guard !cancelled else { throw CancellationError() }
+                        defer { requestState.withLock { $0.request = nil } }
+                        request.recognitionLevel = .accurate
+                        request.recognitionLanguages = ["fr-FR", "en-US"]
+                        request.usesLanguageCorrection = false
+                        try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
+                        let lines = (request.results ?? []).filter {
+                            $0.boundingBox.maxY <= 0.94 && ($0.topCandidates(1).first?.confidence ?? 0) >= 0.3
+                        }.sorted {
+                            let row = Int($0.boundingBox.midY * 60)
+                            let otherRow = Int($1.boundingBox.midY * 60)
+                            return row == otherRow ? $0.boundingBox.minX < $1.boundingBox.minX : row > otherRow
+                        }
+                        let titles = lines.filter {
+                            $0.boundingBox.width >= 0.12
+                                && ($0.topCandidates(1).first?.string.contains(where: \.isLetter) ?? false)
+                                && ($0.topCandidates(1).first?.string.count ?? 0) <= 80
+                        }
+                        let page = titles.first { $0.boundingBox.midY >= 0.65 }
+                        let pageBrightness = page.map { brightness(image, $0.boundingBox) } ?? 255
+                        let sheet = titles.first {
+                            (0.2...0.75).contains($0.boundingBox.midY)
+                                && abs($0.boundingBox.midX - 0.5) <= 0.1
+                                && brightness(image, $0.boundingBox) > pageBrightness + 45
+                        }
+                        let title = sheet ?? page ?? titles.first
+                        let titleText = title?.topCandidates(1).first?.string
+                        let recognizedLines = lines.compactMap { line in
+                            line.topCandidates(1).first.map {
+                                TextLine(text: $0.string, box: line.boundingBox, confidence: $0.confidence,
+                                    rowPixels: pixels(image, box: CGRect(x: 0.02, y: max(0, line.boundingBox.midY - 0.03),
+                                        width: 0.93, height: min(0.06, 1 - max(0, line.boundingBox.midY - 0.03))), width: 128, height: 24))
+                            }
+                        }
+                        let picker = sheet.flatMap { header in
+                            numericPickerName(title: header.topCandidates(1).first?.string ?? "",
+                                confidence: header.topCandidates(1).first?.confidence ?? 0,
+                                body: recognizedLines.filter { $0.box.midY < header.boundingBox.minY })
+                        }
+                        continuation.resume(returning: Recognition(
+                            title: titleText.map { ScreenClassification(screenID: 0, name: $0).name },
+                            pickerName: picker,
+                            lines: recognizedLines.filter { $0.box.midY <= (sheet.map { $0.boundingBox.maxY + 0.04 } ?? 0.94) },
+                            titleConfidence: title?.topCandidates(1).first?.confidence ?? 0,
+                            pixels: pixels(image, box: CGRect(x: 0, y: 0, width: 1,
+                                height: sheet.map { $0.boundingBox.maxY + 0.04 } ?? 0.94), width: 128, height: 256)
+                        ))
+                    } catch {
+                        continuation.resume(throwing: requestState.withLock { $0.cancelled } ? CancellationError() : error)
                     }
-                    let picker = sheet.flatMap { header in
-                        numericPickerName(title: header.topCandidates(1).first?.string ?? "",
-                            confidence: header.topCandidates(1).first?.confidence ?? 0,
-                            body: recognizedLines.filter { $0.box.midY < header.boundingBox.minY })
-                    }
-                    continuation.resume(returning: Recognition(
-                        title: titleText.map { ScreenClassification(screenID: 0, name: $0).name },
-                        pickerName: picker,
-                        lines: recognizedLines.filter { $0.box.midY <= (sheet.map { $0.boundingBox.maxY + 0.04 } ?? 0.94) },
-                        titleConfidence: title?.topCandidates(1).first?.confidence ?? 0,
-                        pixels: pixels(image, box: CGRect(x: 0, y: 0, width: 1,
-                            height: sheet.map { $0.boundingBox.maxY + 0.04 } ?? 0.94), width: 128, height: 256)
-                    ))
-                } catch { continuation.resume(throwing: error) }
+                }
+            }
+        } onCancel: {
+            requestState.withLock { state in
+                state.cancelled = true
+                state.request?.cancel()
             }
         }
         try Task.checkCancellation()

@@ -6,16 +6,16 @@ public enum AnalysisPipeline {
         onProgress: @Sendable (AnalysisProgress) -> Void,
         onAnalyzedFrames: @Sendable ([Frame]) async -> Void = { _ in },
         onPrepared: @Sendable (TimeInterval) async -> Void = { _ in },
-        onDetectedScreens: @Sendable ([UIState]) async -> Void = { _ in }
+        onDetectedScreens: @Sendable ([UIState]) async throws -> Void = { _ in }
     ) async throws -> AnalysisResult {
         let accumulator = CandidateAccumulator()
         let duration = try await VideoDecoder.decode(url: url, onFrames: { frames in
             let detected = await accumulator.consume(frames)
-            if !detected.isEmpty { await onDetectedScreens(detected) }
+            if !detected.isEmpty { try await onDetectedScreens(detected) }
             await onAnalyzedFrames(frames)
         }, onProgress: onProgress, onPrepared: onPrepared)
         let (states, finalState) = await accumulator.finish()
-        if let finalState { await onDetectedScreens([finalState]) }
+        if let finalState { try await onDetectedScreens([finalState]) }
         guard !states.isEmpty else { throw VideoAnalysisError.noStableStates }
         onProgress(AnalysisProgress(stage: .complete, fraction: 1, detail: "\(states.count.formatted()) screenshots ready"))
         return AnalysisResult(sourceURL: url, duration: duration, states: states)
