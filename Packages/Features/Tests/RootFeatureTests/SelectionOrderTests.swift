@@ -17,7 +17,7 @@ struct SelectionOrderTests {
         model.selectScreenshot(ids[1], modifiers: [.command])
         model.setTimelineGrouping(true)
         #expect(model.timelineScreenGroups.map(\.id) == [ids[0], ids[1], ids[4]])
-        #expect(model.timelineScreenGroups.last?.name == "À identifier")
+        #expect(model.timelineScreenGroups.last?.name == String(localized: "Unidentified", bundle: .module))
         #expect(model.visibleScreenshots.map(\.id) == [ids[0], ids[2], ids[1], ids[3], ids[4]])
         #expect(model.selectedScreenshotIDs == [ids[0], ids[1]])
         model.selectScreenshot(ids[0], modifiers: [])

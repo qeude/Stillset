@@ -7,12 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B19F95A10C144E6294FBD001 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = B19F95A10C144E6294FBD002 /* Localizable.xcstrings */; };
 		41A718B7C0D541DC968B9AB1 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 41A718B7C0D541DC968B9AB2 /* AppIcon.icon */; };
 		637136382026B22E82F87F36 /* StillsetFeatures in Frameworks */ = {isa = PBXBuildFile; productRef = 02DDD8E94AF81CCE64ED01F5 /* StillsetFeatures */; };
 		F1E6917E55478FCE986A3E21 /* StillsetApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1479EADDBE5E02498FD3348 /* StillsetApp.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		B19F95A10C144E6294FBD002 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		41A718B7C0D541DC968B9AB2 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 		3F22515FDF8ADF80D8DAB29F /* Stillset.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Stillset.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E1479EADDBE5E02498FD3348 /* StillsetApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StillsetApp.swift; sourceTree = "<group>"; };
@@ -52,6 +54,7 @@
 			isa = PBXGroup;
 			children = (
 				41A718B7C0D541DC968B9AB2 /* AppIcon.icon */,
+				B19F95A10C144E6294FBD002 /* Localizable.xcstrings */,
 				E1479EADDBE5E02498FD3348 /* StillsetApp.swift */,
 			);
 			path = App;
@@ -103,6 +106,7 @@
 			knownRegions = (
 				Base,
 				en,
+				fr,
 			);
 			mainGroup = 8E71F8656FF0E7384326408F;
 			minimizedProjectReferenceProxies = 1;
@@ -125,6 +129,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				41A718B7C0D541DC968B9AB1 /* AppIcon.icon in Resources */,
+				B19F95A10C144E6294FBD001 /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -147,7 +152,8 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
-				CONFIGURATION_BUILD_DIR = "$(PROJECT_DIR)/dist";
+				CONFIGURATION_BUILD_DIR = "$(BUILD_DIR)/$(CONFIGURATION)";
+				TARGET_BUILD_DIR = "$(PROJECT_DIR)/dist";
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(BUILD_DIR)/$(CONFIGURATION)",
@@ -166,6 +172,7 @@
 				SDKROOT = macosx;
 				SWIFT_INCLUDE_PATHS = "$(inherited) $(BUILD_DIR)/$(CONFIGURATION)";
 				SWIFT_VERSION = 6.0;
+				SWIFT_EMIT_LOC_STRINGS = YES;
 			};
 			name = Debug;
 		};
@@ -293,7 +300,8 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
-				CONFIGURATION_BUILD_DIR = "$(PROJECT_DIR)/dist";
+				CONFIGURATION_BUILD_DIR = "$(BUILD_DIR)/$(CONFIGURATION)";
+				TARGET_BUILD_DIR = "$(PROJECT_DIR)/dist";
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(BUILD_DIR)/$(CONFIGURATION)",
@@ -312,6 +320,7 @@
 				SDKROOT = macosx;
 				SWIFT_INCLUDE_PATHS = "$(inherited) $(BUILD_DIR)/$(CONFIGURATION)";
 				SWIFT_VERSION = 6.0;
+				SWIFT_EMIT_LOC_STRINGS = YES;
 			};
 			name = Release;
 		};

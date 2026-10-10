@@ -239,7 +239,7 @@ struct VideoImportQueueTests {
         #expect(b.importState == .failed("Unreadable B"))
         queue.retry(b)
         let retry = try #require(queue.models.last)
-        #expect(retry.displayName == "B.mov · essai 2")
+        #expect(retry.displayName == String(localized: "\("B.mov") · attempt \(2)", bundle: .module))
         #expect(retry.importState == .queued)
         for (finished, next) in [(c, d), (d, e), (e, f), (f, retry)] {
             runner.finish(finished, with: .completed)
@@ -331,7 +331,7 @@ struct VideoImportQueueTests {
         let retry = try #require(queue.models.last)
         #expect(queue.models.count == 5)
         #expect(retry.id != a.id)
-        #expect(retry.displayName == "A.mov · essai 2")
+        #expect(retry.displayName == String(localized: "\("A.mov") · attempt \(2)", bundle: .module))
         #expect(retry.importState == .queued)
         #expect(queue.canRetry(a) == false)
         #expect(a.importState == .failed("Unreadable"))
@@ -352,7 +352,7 @@ struct VideoImportQueueTests {
         queue.retry(retry)
         let third = try #require(queue.models.last)
         await runner.waitForStart(third)
-        #expect(third.displayName == "A.mov · essai 3")
+        #expect(third.displayName == String(localized: "\("A.mov") · attempt \(3)", bundle: .module))
         #expect(queue.canRetry(a) == false)
         runner.finish(third, with: .completed)
         await queue.waitUntilDrained()
@@ -388,13 +388,13 @@ struct VideoImportQueueTests {
         let (a, invalid, b) = (queue.models[0], queue.models[1], queue.models[2])
         await runner.waitForStart(a)
         await runner.waitForStart(b)
-        #expect(invalid.importState.failure == "Choisissez un enregistrement MOV ou MP4 local.")
+        #expect(invalid.importState.failure == String(localized: "Choose a local MOV or MP4 recording.", bundle: .module))
         #expect(queue.activeModelIDs == [a.id, b.id])
         invalid.errorMessage = nil
         runner.finish(b, with: .completed)
         runner.finish(a, with: .completed)
         await queue.waitUntilDrained()
-        #expect(queue.models.map(\.importState) == [.completed, .failed("Choisissez un enregistrement MOV ou MP4 local."), .completed])
+        #expect(queue.models.map(\.importState) == [.completed, .failed(String(localized: "Choose a local MOV or MP4 recording.", bundle: .module)), .completed])
     }
 
     @Test(.timeLimit(.minutes(1))) func drainIncludesAppendedWorkAndQueueCanBeReused() async {
@@ -459,7 +459,7 @@ struct VideoImportQueueTests {
         runner.finish(c, with: .completed)
         runner.finish(retry, with: .completed)
         await drain.value
-        #expect(retry.displayName == "B.mov · essai 2")
+        #expect(retry.displayName == String(localized: "\("B.mov") · attempt \(2)", bundle: .module))
     }
 
     @Test func partialRecoveryFindsValidOriginalPNGsInOccurrenceOrder() async throws {

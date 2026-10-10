@@ -19,7 +19,7 @@ struct SessionOccurrence: Identifiable, Sendable {
 
     var fileURL: URL { capture!.fileURL }
     var provenance: String {
-        "V\(videoOrdinal) · \(sourceURL?.lastPathComponent ?? "Vidéo") · essai \(attempt) · \(state.representativeTimestamp.stillsetTimecode)"
+        String(localized: "V\(videoOrdinal) · \(sourceURL?.lastPathComponent ?? String(localized: "Video", bundle: .module)) · attempt \(attempt) · \(state.representativeTimestamp.stillsetTimecode)", bundle: .module)
     }
     var aspectRatio: CGFloat {
         capture?.cachedAspectRatio ?? sourceAspectRatio
@@ -134,7 +134,7 @@ public final class SessionModel {
     private(set) var refinementDetail: String?
     private(set) var isExporting = false
     var exportedFolderURL: URL?
-    var progress = AnalysisProgress(stage: .exporting, fraction: 0, detail: "Enregistrement des PNG")
+    var progress = AnalysisProgress(stage: .exporting, fraction: 0, detail: String(localized: "Saving PNGs", bundle: .module))
     private(set) var projection = SessionProjection.empty
     private(set) var visibility = SessionVisibility.empty
     private(set) var visibleCaptureCount = 0
@@ -367,7 +367,7 @@ public final class SessionModel {
         let groups = order.map { key in
             let members = buckets[key]!
             let first = members[0]
-            return SessionScreenGroup(id: first.id, name: first.classification?.name ?? "À identifier", occurrences: members)
+            return SessionScreenGroup(id: first.id, name: first.classification?.name ?? String(localized: "Unidentified", bundle: .module), occurrences: members)
         }
         return SessionProjection(occurrences: entries, occurrencesByVideo: byVideo, readyInChronology: ready,
             readyByID: readyByID, readyRank: readyRank, allIDs: Set(entries.map(\.id)), readyIDs: Set(readyByID.keys),
@@ -394,8 +394,8 @@ public final class SessionModel {
         if groupsTimelineByScreen {
             sections = groups.map { group in
                 let screenName = group.occurrences.lazy.compactMap { $0.classification?.name }
-                    .first { !$0.isEmpty && $0 != "Écran non identifié" }
-                let name = screenName.map { group.videoCount > 1 ? "\($0) · \(group.videoCount) vidéos" : $0 } ?? ""
+                    .first { !$0.isEmpty && $0 != String(localized: "Unidentified screen", bundle: .module) }
+                let name = screenName.map { group.videoCount > 1 ? String(localized: "\($0) · \(group.videoCount) videos", bundle: .module) : $0 } ?? ""
                 return .init(id: .screen(group.id), name: name,
                     screenGroupID: group.id, occurrences: group.occurrences, job: nil)
             }
@@ -505,8 +505,8 @@ public final class SessionModel {
         activeCatalogRequest = request
         let token = UUID()
         catalogToken = token
-        if request.refined { refinementDetail = "Affinage des captures…" }
-        else { catalogDetail = "Organisation de la session…" }
+        if request.refined { refinementDetail = String(localized: "Refining screenshots…", bundle: .module) }
+        else { catalogDetail = String(localized: "Organizing session…", bundle: .module) }
         let runner = catalogRunner
         let cadence = imports.processing.cadence
         let delivery = ProgressDelivery(cadence: cadence) { [weak self] fraction, _ in
@@ -514,8 +514,8 @@ public final class SessionModel {
                   self.activeCatalogRequest?.refined == request.refined, !self.imports.isBusy,
                   self.catalogSnapshot == request.snapshot else { return false }
             let detail = "\(fraction.formatted(.percent.precision(.fractionLength(0))))"
-            if request.refined { self.refinementDetail = "Affinage des captures… \(detail)" }
-            else { self.catalogDetail = "Organisation de la session… \(detail)" }
+            if request.refined { self.refinementDetail = String(localized: "Refining screenshots… \(detail)", bundle: .module) }
+            else { self.catalogDetail = String(localized: "Organizing session… \(detail)", bundle: .module) }
             return true
         }
         catalogTask = Task.detached(priority: .utility) { [weak self] in
@@ -540,10 +540,10 @@ public final class SessionModel {
                     let applied = self.applyCatalog(result.classifications, snapshot: request.snapshot, refined: request.refined)
                     if applied {
                         if result.recognitionFailures == 0, let error = result.errorDescription {
-                            self.notice = "Organisation partielle : \(error). Toutes les captures restent disponibles."
+                            self.notice = String(localized: "Partial organization: \(error). All screenshots remain available.", bundle: .module)
                         }
                     } else if self.catalogSnapshot == request.snapshot {
-                        self.notice = "L’organisation de la session n’a pas pu être terminée. Toutes les captures restent disponibles."
+                        self.notice = String(localized: "Session organization could not be completed. All screenshots remain available.", bundle: .module)
                     }
                     return applied
                 }
@@ -563,7 +563,7 @@ public final class SessionModel {
                           self.activeCatalogRequest?.refined == request.refined,
                           self.catalogSnapshot == request.snapshot,
                           !self.imports.isBusy else { return false }
-                    self.notice = "Organisation interrompue : \(message). Toutes les captures restent disponibles."
+                    self.notice = String(localized: "Organization interrupted: \(message). All screenshots remain available.", bundle: .module)
                     return true
                 }
             }
@@ -745,9 +745,9 @@ public final class SessionModel {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         if pasteboard.writeObjects(files.map { $0 as NSURL }) {
-            notice = "\(files.count) capture\(files.count == 1 ? "" : "s") copiée\(files.count == 1 ? "" : "s")."
+            notice = String(localized: "\(files.count) screenshots copied.", bundle: .module)
         } else {
-            errorMessage = "Impossible de copier les captures sélectionnées."
+            errorMessage = String(localized: "Could not copy the selected screenshots.", bundle: .module)
         }
     }
 
@@ -763,7 +763,7 @@ public final class SessionModel {
             })
         }
         return .singleFolder(visibleScreenshots.filter { selectedScreenshotIDs.contains($0.id) }.map {
-            .init(sourceURL: $0.fileURL, screenName: $0.classification?.name ?? "À identifier")
+            .init(sourceURL: $0.fileURL, screenName: $0.classification?.name ?? String(localized: "Unidentified", bundle: .module))
         })
     }
 
@@ -787,19 +787,19 @@ public final class SessionModel {
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
-        panel.prompt = "Enregistrer ici"
+        panel.prompt = String(localized: "Save Here", bundle: .module)
         let layout: String
         switch plan {
-        case .singleFolder: layout = "dans un seul dossier, numérotés dans l’ordre de la timeline"
-        case .screenFolders: layout = "dans un dossier par écran, numérotés dans l’ordre de la timeline"
+        case .singleFolder: layout = String(localized: "Choose a folder for \(plan.fileCount) full-resolution PNGs, numbered in timeline order.", bundle: .module)
+        case .screenFolders: layout = String(localized: "Choose a folder for \(plan.fileCount) full-resolution PNGs, organized by screen and numbered in timeline order.", bundle: .module)
         }
-        panel.message = "Choisissez un dossier pour \(plan.fileCount) PNG en pleine résolution, \(layout)."
+        panel.message = layout
         guard panel.runModal() == .OK, let folderURL = panel.url else { return }
 
         let model = self
         notice = nil
         errorMessage = nil
-        progress = AnalysisProgress(stage: .exporting, fraction: 0, detail: "Enregistrement des PNG")
+        progress = AnalysisProgress(stage: .exporting, fraction: 0, detail: String(localized: "Saving PNGs", bundle: .module))
         let work = imports.processing.copyLane
         let cadence = imports.processing.cadence
         let delivery = ProgressDelivery(cadence: cadence) { fraction, detail in
@@ -823,15 +823,15 @@ public final class SessionModel {
                     model.isExporting = false
                     model.exportTask = nil
                     if model.exportCancellationRequested {
-                        model.progress = AnalysisProgress(stage: .cancelled, fraction: 0, detail: "Enregistrement annulé")
+                        model.progress = AnalysisProgress(stage: .cancelled, fraction: 0, detail: String(localized: "Save cancelled", bundle: .module))
                     } else {
                         switch result {
                         case .success(let copied):
                             model.exportedFolderURL = folderURL
-                            model.notice = "\(copied.count) capture\(copied.count == 1 ? "" : "s") enregistrée\(copied.count == 1 ? "" : "s")."
+                            model.notice = String(localized: "\(copied.count) screenshots saved.", bundle: .module)
                             model.progress = AnalysisProgress(stage: .complete, fraction: 1, detail: model.notice ?? "")
                         case .failure(let error) where error is CancellationError:
-                            model.progress = AnalysisProgress(stage: .cancelled, fraction: 0, detail: "Enregistrement annulé")
+                            model.progress = AnalysisProgress(stage: .cancelled, fraction: 0, detail: String(localized: "Save cancelled", bundle: .module))
                         case .failure(let error): model.errorMessage = error.localizedDescription
                         }
                     }

@@ -37,7 +37,7 @@ public struct CachedAnalysis: Sendable {
 
 public actor RecentAnalysisCache {
     public static let shared = RecentAnalysisCache()
-    public static let schemaVersion = 1
+    public static let schemaVersion = 2
     public static let analysisVersion = 1
 
     public struct Source: Sendable {
@@ -194,6 +194,7 @@ public actor RecentAnalysisCache {
     private func valid(_ envelope: Envelope) -> Bool {
         let date = now().timeIntervalSince1970
         guard envelope.schemaVersion == Self.schemaVersion, envelope.analysisVersion == Self.analysisVersion,
+              envelope.language == Bundle.module.preferredLocalizations.first,
               envelope.sha256.count == 64, envelope.sha256.allSatisfy({ "0123456789abcdef".contains($0) }),
               envelope.byteCount > 0, envelope.lastUsedAt.isFinite, envelope.lastUsedAt <= date,
               date - envelope.lastUsedAt <= limits.maxAge,
@@ -260,6 +261,7 @@ public actor RecentAnalysisCache {
     private struct Envelope: Codable {
         var schemaVersion = RecentAnalysisCache.schemaVersion
         var analysisVersion = RecentAnalysisCache.analysisVersion
+        var language = Bundle.module.preferredLocalizations.first ?? "en"
         let sha256: String
         let byteCount: Int64
         var lastUsedAt: Double

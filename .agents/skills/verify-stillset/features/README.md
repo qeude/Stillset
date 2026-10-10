@@ -9,6 +9,10 @@ Use this index to choose a user-visible path and gather evidence for it. The wor
 | Selection and export | Timeline click / ⌘-click / ⇧-click / ⌘A; **Copier les captures** (⌘C); **Exporter…** or **Enregistrer les captures…** (⌘S); drag selection | [selection-and-export.md](selection-and-export.md) |
 | Settings | **Stillset → Réglages…** (⌘,) | [settings.md](settings.md) |
 
+## Languages
+
+Entry-point labels in these maps are shown in French. Stillset also supports English and follows the macOS app language, with English as the fallback. For localization verification, inspect the landing screen, native menus, Settings, import progress, timeline captions and accessibility labels in both languages. Use temporary launch arguments to select a language for verification; preserve the user’s saved language preferences.
+
 ## Evidence rules
 
 Launch the native `com.stillflow.app` through the native Xcode MCP. Use `cua_repl` for every UI action and observation. Resolve the running app from its launch/run metadata, read `app.getAXState()`, and use only indexes freshly observed in that accessibility tree. Re-read the tree after state changes before clicking; native menu items may need Return after they open. Do not use browser locators or stale indexes.

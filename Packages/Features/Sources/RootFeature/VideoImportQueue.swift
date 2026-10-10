@@ -20,12 +20,12 @@ enum VideoImportState: Equatable, Sendable {
     }
     var label: String {
         switch self {
-        case .review, .completed: "Terminée"
-        case .queued: "En attente"
-        case .running: "Analyse en cours"
-        case .cancelling: "Annulation en cours…"
-        case .failed: "Échec de l’analyse"
-        case .cancelled: "Analyse annulée"
+        case .review, .completed: String(localized: "Completed", bundle: .module)
+        case .queued: String(localized: "Queued", bundle: .module)
+        case .running: String(localized: "Analyzing", bundle: .module)
+        case .cancelling: String(localized: "Cancelling…", bundle: .module)
+        case .failed: String(localized: "Analysis Failed", bundle: .module)
+        case .cancelled: String(localized: "Analysis Cancelled", bundle: .module)
         }
     }
     var failure: String? {
@@ -84,7 +84,7 @@ public final class VideoImportQueue {
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.prompt = "Ouvrir"
+        panel.prompt = String(localized: "Open", bundle: .module)
         guard panel.runModal() == .OK else { return nil }
         return panel.urls
     }
@@ -104,7 +104,7 @@ public final class VideoImportQueue {
         for url in urls {
             let model = AppModel()
             let supported = Self.supportsVideo(url)
-            model.admit(url, failure: supported ? nil : "Choisissez un enregistrement MOV ou MP4 local.")
+            model.admit(url, failure: supported ? nil : String(localized: "Choose a local MOV or MP4 recording.", bundle: .module))
             append(model)
         }
         if !urls.isEmpty { onPublication?() }
@@ -149,7 +149,7 @@ public final class VideoImportQueue {
         retry.retrySourceID = sourceID
         retry.attempt = models.filter { ($0.retrySourceID ?? $0.id) == sourceID }.map(\.attempt).max().map { $0 + 1 } ?? 2
         let supported = url.isFileURL && ["mov", "mp4"].contains(url.pathExtension.lowercased())
-        retry.admit(url, failure: supported ? nil : "Choisissez un enregistrement MOV ou MP4 local.")
+        retry.admit(url, failure: supported ? nil : String(localized: "Choose a local MOV or MP4 recording.", bundle: .module))
         append(retry)
         onPublication?()
         fillAvailableSlots()
