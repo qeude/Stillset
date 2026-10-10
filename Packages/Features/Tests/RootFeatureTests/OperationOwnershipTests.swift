@@ -60,7 +60,8 @@ struct OperationOwnershipTests {
         #expect(model.exportedFolderURL == folder && model.saveOutcome == .completed)
         let outputs = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        #expect(outputs.map(\.lastPathComponent) == (1...5).map { String(format: "%03d_a-identifier.png", $0) })
+        let slug = Bundle.module.preferredLocalizations.first == "fr" ? "a-identifier" : "unidentified"
+        #expect(outputs.map(\.lastPathComponent) == (1...5).map { String(format: "%03d_", $0) + slug + ".png" })
         #expect(try outputs.map { try Data(contentsOf: $0) } == originalBytes)
         #expect(try sources.map { try Data(contentsOf: $0) } == originalBytes)
     }

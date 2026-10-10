@@ -5,7 +5,7 @@ struct TimelineDragView: NSViewRepresentable {
     @Environment(\.thumbnailLoader) private var thumbnailLoader
     let urlsForDrag: @MainActor () -> [URL]
     let accessibilityText: String
-    var accessibilityHint = "⌘ clic : sélection · ⇧ clic : plage"
+    var accessibilityHint = String(localized: "⌘ click: select · ⇧ click: range", bundle: .module)
     let onClick: (@MainActor (NSEvent.ModifierFlags) -> Void)?
     let keyboardTarget: TimelineKeyboardTarget
 

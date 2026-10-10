@@ -290,7 +290,7 @@ enum ScreenVisionFallback {
               body.filter({ $0.confidence >= 0.85 }).count >= 3,
               body.allSatisfy({ $0.text.range(of: #"^[+0-9][0-9\s.,+–-]*(?:km)?$"#,
                   options: [.regularExpression, .caseInsensitive]) != nil }) else { return nil }
-        return "Choix de " + title.lowercased()
+        return String(localized: "Choose \(title)", bundle: .module)
     }
 
     private static func pixels(_ image: CGImage, box: CGRect, width: Int, height: Int) -> [UInt8] {

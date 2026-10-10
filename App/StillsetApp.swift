@@ -20,21 +20,21 @@ struct StillsetApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("Ouvrir des enregistrements…", action: openVideos)
+                Button("Open Recordings…", action: openVideos)
                     .keyboardShortcut("o", modifiers: .command)
-                Button("Ajouter des vidéos à la session…", action: session.imports.chooseVideos)
+                Button("Add Videos to Session…", action: session.imports.chooseVideos)
                     .keyboardShortcut("o", modifiers: [.command, .shift])
             }
             CommandGroup(replacing: .pasteboard) {
-                Button("Copier les captures", action: session.copySelection)
+                Button("Copy Screenshots", action: session.copySelection)
                     .keyboardShortcut("c", modifiers: .command)
                     .disabled(session.canCopySelection == false)
             }
             CommandGroup(after: .pasteboard) {
-                Button("Tout sélectionner", action: session.selectAll)
+                Button("Select All", action: session.selectAll)
                     .keyboardShortcut("a", modifiers: .command)
                     .disabled(session.hasScreenshots == false)
-                Button("Enregistrer les captures…", action: session.saveSelection)
+                Button("Save Screenshots…", action: session.saveSelection)
                     .keyboardShortcut("s", modifiers: .command)
                     .disabled(session.canSaveSelection == false)
             }

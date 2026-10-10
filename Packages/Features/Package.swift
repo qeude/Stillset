@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Features",
+    defaultLocalization: "en",
     platforms: [.macOS("27.0")],
     products: [.library(name: "StillsetFeatures", targets: ["StillsetFeatures"])],
     dependencies: [.package(path: "../Core")],
@@ -10,7 +11,7 @@ let package = Package(
         .target(
             name: "StillsetFeatures",
             dependencies: [.product(name: "StillsetCore", package: "core")],
-            path: "Sources"
+            path: "Sources", resources: [.process("Resources")]
         ),
         .testTarget(
             name: "StillsetFeaturesTests",

@@ -89,7 +89,7 @@ struct EvidenceReuseTests {
             return try ScreenCatalogAnalyzer.proxyImage(data)
         })
         let first = try await analyzer.analyze(fileURLs: images.files, useFoundationModels: false)
-        #expect(first.classifications.map(\.name) == ["Accueil", "Capture à examiner", "Compte"])
+        #expect(first.classifications.map(\.name) == ["Accueil", String(localized: "Screenshot to Review", bundle: .module), "Compte"])
         #expect(first.recognitionFailures == 1)
         let retried = try await analyzer.analyze(fileURLs: images.files, useFoundationModels: false)
         #expect(retried.classifications.map(\.name) == ["Accueil", "Profil", "Compte"])
@@ -110,7 +110,7 @@ struct EvidenceReuseTests {
         let files = [images.files[0], images.files[0]]
         for contextual in [true, false, true] {
             let result = try await analyzer.analyze(fileURLs: files, useContextualNaming: contextual, useFoundationModels: false)
-            #expect(result.classifications == Array(repeating: ScreenClassification(screenID: 1, name: "Capture à examiner"), count: 2))
+            #expect(result.classifications == Array(repeating: ScreenClassification(screenID: 1, name: String(localized: "Screenshot to Review", bundle: .module)), count: 2))
             #expect(result.recognitionFailures == (contextual ? 2 : 0))
         }
         #expect(calls.withLock { $0 } == 1)

@@ -73,17 +73,17 @@ private struct SingleVideoStatus: View {
                         ProgressView(value: video.progress.fraction)
                             .tint(StillsetStyle.accent)
                             .frame(width: 240)
-                            .accessibilityLabel("Progression de l’analyse")
+                            .accessibilityLabel(LocalizedStringResource("Analysis progress", bundle: .atURL(Bundle.module.bundleURL)))
                     }
                     if video.importState == .running || video.importState == .queued {
-                        Button("Annuler", systemImage: "stop.circle", action: cancel)
-                            .help("Annuler l’analyse")
+                        Button(LocalizedStringResource("Cancel", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "stop.circle", action: cancel)
+                            .help(Text("Cancel analysis", bundle: .module))
                     } else if video.importState.canRetry {
-                        Button("Réessayer", systemImage: "arrow.clockwise") { session.imports.retry(video) }
+                        Button(LocalizedStringResource("Retry", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "arrow.clockwise") { session.imports.retry(video) }
                             .disabled(!session.imports.canRetry(video))
                     }
                     if session.refinementDetail != nil {
-                        Button("Arrêter l’affinage", action: session.cancelRefinement)
+                        Button(LocalizedStringResource("Stop Refinement", bundle: .atURL(Bundle.module.bundleURL)), action: session.cancelRefinement)
                     }
                 }
                 .buttonStyle(.bordered)
@@ -104,14 +104,25 @@ private struct CaptureCount: View {
     var body: some View {
         let count = model.visibleCaptureCount
         let videoCount = model.imports.models.count
-        let videos = videoCount > 1 ? " · \(videoCount) vidéos" : ""
-        Text("\(count) capture\(count == 1 ? "" : "s")\(model.showsUniqueScreens ? " uniques" : "")\(videos)")
+        Text(countLabel(count: count, videoCount: videoCount))
             .font(.system(size: 24, weight: .semibold))
             .monospacedDigit()
             .foregroundStyle(StillsetStyle.ink)
             .contentTransition(reduceMotion ? .identity : .numericText(value: Double(count)))
             .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: count)
     }
+
+    private func countLabel(count: Int, videoCount: Int) -> LocalizedStringResource {
+        if videoCount > 1 {
+            return model.showsUniqueScreens
+                ? LocalizedStringResource("\(count) unique screenshots · \(videoCount) videos", bundle: .atURL(Bundle.module.bundleURL))
+                : LocalizedStringResource("\(count) screenshots · \(videoCount) videos", bundle: .atURL(Bundle.module.bundleURL))
+        }
+        return model.showsUniqueScreens
+            ? LocalizedStringResource("\(count) unique screenshots", bundle: .atURL(Bundle.module.bundleURL))
+            : LocalizedStringResource("\(count) screenshots", bundle: .atURL(Bundle.module.bundleURL))
+    }
+
 }
 
 private struct SessionExportStatus: View {
@@ -122,7 +133,7 @@ private struct SessionExportStatus: View {
             HStack {
                 Text(model.progress.detail)
                 ProgressView(value: model.progress.fraction).frame(width: 180)
-                Button("Annuler l’export", action: model.cancelExport)
+                Button(LocalizedStringResource("Cancel Export", bundle: .atURL(Bundle.module.bundleURL)), action: model.cancelExport)
             }.font(.caption).padding(.bottom, 8)
         }
     }
@@ -137,7 +148,7 @@ private struct SessionNotice: View {
             HStack {
                 Text(notice)
                 if model.exportedFolderURL != nil {
-                    Button("Afficher dans le Finder", action: model.showExportedFolder)
+                    Button(LocalizedStringResource("Show in Finder", bundle: .atURL(Bundle.module.bundleURL)), action: model.showExportedFolder)
                 }
             }.font(.caption).padding(.bottom, 8)
         }
@@ -207,8 +218,8 @@ private struct UnavailableSessionPreview: View {
     let isAnalyzing: Bool
 
     var body: some View {
-        ContentUnavailableView("Captures de la session", systemImage: "photo.on.rectangle",
-            description: Text(isAnalyzing ? "Les captures apparaîtront pendant l’analyse." : "Consultez l’état des vidéos pour réessayer ou ajouter un enregistrement."))
+        ContentUnavailableView(LocalizedStringResource("Session Screenshots", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "photo.on.rectangle",
+            description: Text(isAnalyzing ? LocalizedStringResource("Screenshots will appear during analysis.", bundle: .atURL(Bundle.module.bundleURL)) : LocalizedStringResource("Check video status to retry or add a recording.", bundle: .atURL(Bundle.module.bundleURL))))
     }
 }
 
@@ -298,7 +309,8 @@ private struct PhotoStackPreview: View {
         .overlay {
             TimelineDragView(
                 urlsForDrag: { model.previewDragURLs },
-                accessibilityText: (model.focusedScreenshot?.provenance ?? "") + ", aperçu, \(selectedCount) capture\(selectedCount == 1 ? "" : "s") sélectionnée\(selectedCount == 1 ? "" : "s")",
+                accessibilityText: (model.focusedScreenshot?.provenance ?? "") + ", "
+                    + String(localized: "Preview, \(selectedCount) screenshots selected.", bundle: .module),
                 onClick: nil,
                 keyboardTarget: keyboardTarget
             )
@@ -371,7 +383,7 @@ private struct StageProgressBar: View {
         }
         .frame(height: 4)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Progression")
+        .accessibilityLabel(LocalizedStringResource("Progress", bundle: .atURL(Bundle.module.bundleURL)))
         .accessibilityValue(stageFraction.formatted(.percent.precision(.fractionLength(0))))
     }
 }

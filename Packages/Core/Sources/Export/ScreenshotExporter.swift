@@ -45,7 +45,7 @@ public enum ScreenshotExporter {
                 let name = numberedName(index: index, width: width, screenName: entry.screenName)
                 let file = try await work.perform { try copySource(entry.sourceURL, to: folderURL, name: name) }
                 copied.append(file)
-                try await onProgress(Double(copied.count) / Double(count), "Screenshot \(copied.count) of \(count)")
+                try await onProgress(Double(copied.count) / Double(count), String(localized: "Screenshot \(copied.count) of \(count)", bundle: .module))
             }
         case .screenFolders(let allGroups):
             let groups = allGroups.filter { !$0.sourceURLs.isEmpty }
@@ -60,7 +60,7 @@ public enum ScreenshotExporter {
                     let name = numberedName(index: fileIndex, width: fileWidth, screenName: group.screenName)
                     let file = try await work.perform { try copySource(source, to: folder, name: name) }
                     copied.append(file)
-                    try await onProgress(Double(copied.count) / Double(count), "Screenshot \(copied.count) of \(count)")
+                    try await onProgress(Double(copied.count) / Double(count), String(localized: "Screenshot \(copied.count) of \(count)", bundle: .module))
                 }
             }
         }
@@ -96,7 +96,7 @@ public enum ScreenshotExporter {
                 return destination
             }
             copied.append(destination)
-            try await onProgress(Double(index + 1) / Double(files.count), "Screenshot \(index + 1) of \(files.count)")
+            try await onProgress(Double(index + 1) / Double(files.count), String(localized: "Screenshot \(index + 1) of \(files.count)", bundle: .module))
         }
         try Task.checkCancellation()
         return copied
@@ -176,7 +176,7 @@ public enum ScreenshotExporter {
                             try Task.checkCancellation()
                             outputURLs.append(url)
                             try await onScreenshot(next, url)
-                            try await onProgress(Double(next + 1) / Double(states.count), "Screenshot \(next + 1) of \(states.count)")
+                            try await onProgress(Double(next + 1) / Double(states.count), String(localized: "Screenshot \(next + 1) of \(states.count)", bundle: .module))
                             try Task.checkCancellation()
                             next += 1
                         }
@@ -256,10 +256,10 @@ public enum ScreenshotExportError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .invalidImageSequence: "The video did not provide every requested screenshot."
-        case .invalidNameCount: "Every screenshot must have a screen name."
-        case .cannotCreateFile(let url): "Could not create \(url.lastPathComponent)."
-        case .cannotWriteFile(let url): "Could not write \(url.lastPathComponent)."
+        case .invalidImageSequence: String(localized: "The video did not provide every requested screenshot.", bundle: .module)
+        case .invalidNameCount: String(localized: "Every screenshot must have a screen name.", bundle: .module)
+        case .cannotCreateFile(let url): String(localized: "Could not create \(url.lastPathComponent).", bundle: .module)
+        case .cannotWriteFile(let url): String(localized: "Could not write \(url.lastPathComponent).", bundle: .module)
         }
     }
 }

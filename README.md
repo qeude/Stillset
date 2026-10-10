@@ -43,6 +43,12 @@ choose as original-resolution PNGs. Everything runs locally on your Mac.
 3. **Export.** Save your selection as PNGs, copy the files, or drag them
    into another app.
 
+## Languages
+
+Stillset supports English and French and follows the macOS app language preference, with English as the default and fallback language. This README uses the English interface labels. Menus, controls, accessibility labels, progress and errors are localized. Recognized text keeps the recording’s original wording; optional AI screen names follow the app language. Recent analysis metadata is reused only in the language in which it was generated.
+
+Translations live in `App/Localizable.xcstrings` and each package’s `Sources/Resources/Localizable.xcstrings`.
+
 ## Get started
 
 Build from source with **macOS 27 or later** and **Xcode 27 or later**.
@@ -60,7 +66,7 @@ A development team is not required.
 
 ### Optional AI refinement
 
-Use **Affiner avec l’IA** to refine ambiguous screen names and groups.
+Use **Refine with AI…** to refine ambiguous screen names and groups.
 This requires Apple Intelligence enabled on a supported Mac.
 Automatic analysis works independently of Apple Intelligence.
 

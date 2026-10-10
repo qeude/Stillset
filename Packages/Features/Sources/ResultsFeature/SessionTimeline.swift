@@ -99,7 +99,7 @@ struct SessionTimeline: View {
             label.accessibilityHidden(true)
                 .overlay {
                     TimelineDragView(urlsForDrag: { [] }, accessibilityText: header.name,
-                        accessibilityHint: "Sélectionne les captures visibles de cet écran",
+                        accessibilityHint: String(localized: "Selects the visible screenshots for this screen", bundle: .module),
                         onClick: { _ in model.selectTimelineScreenGroup(groupID) }, keyboardTarget: keyboardTarget)
                 }
         } else {
@@ -115,7 +115,7 @@ struct SessionTimeline: View {
                 Text(job.importState.label)
                 if let failure = job.importState.failure { Text(failure).lineLimit(3).help(failure) }
                 if job.importState.isPending { Text(job.progress.detail) }
-                Text("Aucune capture disponible")
+                Text("No screenshots available", bundle: .module)
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -131,7 +131,7 @@ struct SessionTimeline: View {
                 .overlay {
                     if occurrence.capture != nil {
                         TimelineDragView(urlsForDrag: { model.dragURLs(startingAt: occurrence.id) },
-                            accessibilityText: occurrence.provenance + (selected ? ", sélectionnée" : "")
+                            accessibilityText: occurrence.provenance + (selected ? String(localized: ", selected", bundle: .module) : "")
                                 + (occurrence.classification.map { ", \($0.name)" } ?? ""),
                             onClick: { model.selectScreenshot(occurrence.id, modifiers: $0) }, keyboardTarget: keyboardTarget)
                     }
@@ -339,7 +339,7 @@ private struct TimelineOccurrenceCell: View {
                     .foregroundStyle(StillsetStyle.muted.opacity(0.65))
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(occurrence.provenance)
-                    .accessibilityValue("En attente")
+                    .accessibilityValue(Text("Queued", bundle: .module))
                     .accessibilityHidden(occurrence.capture != nil)
 
                 if let screenshot = occurrence.capture {
