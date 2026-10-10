@@ -243,7 +243,7 @@ struct SessionModelTests {
         #expect(session.selectedScreenshotIDs == [id(b, cb.id)])
         session.selectAll()
         #expect(session.makeSelectionExportPlan() == .singleFolder([
-            .init(sourceURL: ca.fileURL, screenName: "À identifier"), .init(sourceURL: cb.fileURL, screenName: "À identifier")]))
+            .init(sourceURL: ca.fileURL, screenName: String(localized: "Unidentified", bundle: .module)), .init(sourceURL: cb.fileURL, screenName: String(localized: "Unidentified", bundle: .module))]))
     }
 
     @Test func backgroundArrivalsKeepManualSelectionAndReadyExportWhileAnalysisRuns() {
@@ -316,7 +316,7 @@ struct SessionModelTests {
         #expect(session.applyCatalog([label(1, 1), label(2, 2), label(3, 3)], snapshot: session.catalogSnapshot, refined: false))
         session.setUniqueScreens(true)
         #expect(session.visibleScreenshots.map(\.id) == [aID, bIDs[0]])
-        #expect(session.timelineScreenGroups.map(\.name) == ["À identifier", "Profil"])
+        #expect(session.timelineScreenGroups.map(\.name) == [String(localized: "Unidentified", bundle: .module), "Profil"])
         #expect(session.timelineScreenGroups.count == 2)
         #expect(b.screenClassifications.values.allSatisfy { $0.name == "Compte" })
     }
@@ -424,8 +424,8 @@ struct SessionModelTests {
         queue.enqueue([URL(fileURLWithPath: "/tmp/invalid.txt")])
         #expect(queue.models.map(\.importOrdinal) == [1, 2, 4])
         #expect(session.makeSelectionExportPlan() == plan)
-        #expect(plan == .singleFolder([.init(sourceURL: ca.fileURL, screenName: "À identifier"),
-            .init(sourceURL: cb.fileURL, screenName: "À identifier")]))
+        #expect(plan == .singleFolder([.init(sourceURL: ca.fileURL, screenName: String(localized: "Unidentified", bundle: .module)),
+            .init(sourceURL: cb.fileURL, screenName: String(localized: "Unidentified", bundle: .module))]))
         runner.finish(a, with: .completed)
         runner.finish(b, with: .completed)
         await queue.waitUntilDrained()
@@ -553,7 +553,7 @@ struct SessionModelTests {
         #expect(session.projectionBuildCount == builds + 1)
         #expect(session.visibleScreenshots.map(\.id) == [id(a, first.id), id(a, second.id)])
         #expect(session.focusedScreenshotID == id(a, second.id))
-        #expect(session.makeSelectionExportPlan() == .singleFolder([.init(sourceURL: second.fileURL, screenName: "À identifier")]))
+        #expect(session.makeSelectionExportPlan() == .singleFolder([.init(sourceURL: second.fileURL, screenName: String(localized: "Unidentified", bundle: .module))]))
     }
 
     @Test func sourceGeometryChangesPublishOnceAndEmptyOrInvalidFramesRestoreFallback() {

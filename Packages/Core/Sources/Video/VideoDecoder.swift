@@ -44,7 +44,7 @@ public enum VideoDecoder {
             if let timestamp = frames.last?.timestamp, timestamp - lastProgressTime >= 0.25 {
                 let fraction = duration > 0 ? min(0.99, max(0, timestamp / duration)) : 0
                 try await onProgress(AnalysisProgress(stage: .decoding, fraction: fraction,
-                    detail: "\(frameCount.formatted()) frames analyzed"))
+                    detail: String(localized: "\(frameCount.formatted()) frames analyzed", bundle: .module)))
                 lastProgressTime = timestamp
             }
         }
@@ -188,10 +188,10 @@ public enum VideoAnalysisError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .noVideoTrack: "This recording has no video track."
-        case .noVideoFrames: "No video frames could be decoded."
-        case .noStableStates: "No stable screen states were detected."
-        case .cannotReadVideo: "The video could not be decoded."
+        case .noVideoTrack: String(localized: "This recording has no video track.", bundle: .module)
+        case .noVideoFrames: String(localized: "No video frames could be decoded.", bundle: .module)
+        case .noStableStates: String(localized: "No stable screen states were detected.", bundle: .module)
+        case .cannotReadVideo: String(localized: "The video could not be decoded.", bundle: .module)
         }
     }
 }

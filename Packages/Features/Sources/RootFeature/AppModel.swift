@@ -52,7 +52,7 @@ public final class AppModel: Identifiable {
     var attempt = 1 { didSet { structuralChanged() } }
     var displayName: String {
         let name = videoURL?.lastPathComponent ?? "Stillset"
-        return attempt == 1 ? name : "\(name) · essai \(attempt)"
+        return attempt == 1 ? name : String(localized: "\(name) · attempt \(attempt)", bundle: .module)
     }
 
     var videoURL: URL? { didSet { structuralChanged() } }
@@ -81,26 +81,26 @@ public final class AppModel: Identifiable {
     private struct AnalysisOperation {
         let id = UUID()
         var task: Task<Void, Never>?
-        var progress = AnalysisProgress(stage: .decoding, fraction: 0, detail: "Lecture de la vidéo")
+        var progress = AnalysisProgress(stage: .decoding, fraction: 0, detail: String(localized: "Reading video", bundle: .module))
     }
 
     private struct SaveOperation {
         let id = UUID()
         let plan: ScreenshotExportPlan
         var task: Task<Void, Never>?
-        var progress = AnalysisProgress(stage: .exporting, fraction: 0, detail: "Enregistrement des PNG")
+        var progress = AnalysisProgress(stage: .exporting, fraction: 0, detail: String(localized: "Saving PNGs", bundle: .module))
     }
 
     private struct RefinementOperation {
         let id = UUID()
         var task: Task<Void, Never>?
-        var detail = "Affinage des captures…"
+        var detail = String(localized: "Refining screenshots…", bundle: .module)
     }
 
     private var analysisOperation: AnalysisOperation?
     private var saveOperation: SaveOperation?
     private var refinementOperation: RefinementOperation?
-    private var lastAnalysisProgress = AnalysisProgress(stage: .decoding, fraction: 0, detail: "Déposez un enregistrement")
+    private var lastAnalysisProgress = AnalysisProgress(stage: .decoding, fraction: 0, detail: String(localized: "Drop a recording", bundle: .module))
     var progress: AnalysisProgress {
         get { analysisOperation?.progress ?? lastAnalysisProgress }
         set {
@@ -176,7 +176,7 @@ public final class AppModel: Identifiable {
         progress = AnalysisProgress(
             stage: running ? .annotating : .complete,
             fraction: running ? 0.62 : 1,
-            detail: running ? "Organisation des captures…" : "Captures prêtes"
+            detail: running ? String(localized: "Organizing screenshots…", bundle: .module) : String(localized: "Screenshots ready", bundle: .module)
         )
     }
     #endif
@@ -267,8 +267,8 @@ public final class AppModel: Identifiable {
             analysisOperation = nil
             importState = terminal
             switch terminal {
-            case .completed: progress = AnalysisProgress(stage: .complete, fraction: 1, detail: "\(screenshots.count) captures prêtes")
-            case .cancelled: progress = AnalysisProgress(stage: .cancelled, fraction: 0, detail: "Analyse annulée")
+            case .completed: progress = AnalysisProgress(stage: .complete, fraction: 1, detail: String(localized: "\(screenshots.count) screenshots ready", bundle: .module))
+            case .cancelled: progress = AnalysisProgress(stage: .cancelled, fraction: 0, detail: String(localized: "Analysis Cancelled", bundle: .module))
             case .failed(let message): errorMessage = message
             default: preconditionFailure("Analysis runner must return a terminal state")
             }
@@ -374,7 +374,7 @@ public final class AppModel: Identifiable {
         return captures.compactMap { capture in
             let screen = screenClassifications[capture.id]
             guard seen.insert(screen?.screenID).inserted else { return nil }
-            return TimelineScreenGroup(id: screen?.screenID, name: screen?.name ?? "À identifier",
+            return TimelineScreenGroup(id: screen?.screenID, name: screen?.name ?? String(localized: "Unidentified", bundle: .module),
                                        screenshots: byScreen[screen?.screenID, default: []])
         }
     }
@@ -432,7 +432,7 @@ public final class AppModel: Identifiable {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.prompt = "Ouvrir"
+        panel.prompt = String(localized: "Open", bundle: .module)
         guard panel.runModal() == .OK, let url = panel.url else { return }
         importVideo(url)
     }
@@ -449,7 +449,7 @@ public final class AppModel: Identifiable {
     private func beginAnalysis(_ url: URL, reuseCache: Bool) {
         guard !isWorking else { return }
         guard ["mov", "mp4"].contains(url.pathExtension.lowercased()) else {
-            errorMessage = "Choisissez un enregistrement MOV ou MP4."
+            errorMessage = String(localized: "Choose a MOV or MP4 recording.", bundle: .module)
             return
         }
         cancelRefinement()
@@ -505,7 +505,7 @@ public final class AppModel: Identifiable {
         analysisOperation = AnalysisOperation()
         analysisOutcome = nil
         let beforeOrganization = beforeOrganization
-        progress = AnalysisProgress(stage: .decoding, fraction: 0, detail: "Lecture de la vidéo")
+        progress = AnalysisProgress(stage: .decoding, fraction: 0, detail: String(localized: "Reading video", bundle: .module))
         let model = self
         analysisOperation?.task = Task.detached(priority: .userInitiated) {
             await oldRefinement?.value
@@ -586,7 +586,7 @@ public final class AppModel: Identifiable {
                                 throw ScreenshotExportError.invalidImageSequence
                             }
                             let files = completed.map(\.fileURL)
-                            try await delivery.flush(.stage(AnalysisProgress(stage: .annotating, fraction: 0, detail: "Organisation des captures…")))
+                            try await delivery.flush(.stage(AnalysisProgress(stage: .annotating, fraction: 0, detail: String(localized: "Organizing screenshots…", bundle: .module))))
                             try Task.checkCancellation()
                             let catalog: ScreenCatalog
                             if let cached {
@@ -594,14 +594,14 @@ public final class AppModel: Identifiable {
                             } else {
                                 await MainActor.run {
                                     guard model.acceptsAnalysis(session: session, attempt: currentAttempt) else { return }
-                                    model.progress = AnalysisProgress(stage: .annotating, fraction: 0, detail: "Organisation des captures…")
+                                    model.progress = AnalysisProgress(stage: .annotating, fraction: 0, detail: String(localized: "Organizing screenshots…", bundle: .module))
                                 }
                                 try await beforeOrganization()
                                 if let localCatalog {
                                     catalog = try await localCatalog(files)
                                 } else {
                                     catalog = try await catalogAnalyzer.analyze(fileURLs: files, work: work, useFoundationModels: false, preparedRecognition: preparedRecognition) { fraction, _ in
-                                        try await delivery.progress(AnalysisProgress(stage: .annotating, fraction: fraction, detail: "Organisation des captures…"))
+                                        try await delivery.progress(AnalysisProgress(stage: .annotating, fraction: fraction, detail: String(localized: "Organizing screenshots…", bundle: .module)))
                                     }
                                 }
                             }
@@ -613,7 +613,7 @@ public final class AppModel: Identifiable {
                                 if matches == nil { source = nil }
                             }
                             try Task.checkCancellation()
-                            try await delivery.flush(.stage(AnalysisProgress(stage: .complete, fraction: 1, detail: "\(files.count) captures prêtes")))
+                            try await delivery.flush(.stage(AnalysisProgress(stage: .complete, fraction: 1, detail: String(localized: "\(files.count) screenshots ready", bundle: .module))))
                             let completedSource = source
                             let wasCached = cached != nil
                             let accepted = await MainActor.run {
@@ -624,9 +624,9 @@ public final class AppModel: Identifiable {
                                 model.cachedContext = completedSource.map { (result, $0) }
                                 let warning = Self.catalogWarning(catalog)
                                 model.notice = wasCached
-                                    ? (["Analyse récente retrouvée", warning].compactMap { $0 }.joined(separator: ". "))
+                                    ? ([String(localized: "Recent analysis restored", bundle: .module), warning].compactMap { $0 }.joined(separator: ". "))
                                     : warning
-                                model.progress = AnalysisProgress(stage: .complete, fraction: 1, detail: "\(files.count) captures prêtes")
+                                model.progress = AnalysisProgress(stage: .complete, fraction: 1, detail: String(localized: "\(files.count) screenshots ready", bundle: .module))
                                 return true
                             }
                             guard accepted else { return }
@@ -661,7 +661,7 @@ public final class AppModel: Identifiable {
                                 guard model.acceptsAnalysis(session: session, attempt: currentAttempt) else { return false }
                                 model.analysisAttemptID = nextAttempt
                                 model.clearAnalysisCaptures()
-                                model.progress = AnalysisProgress(stage: .decoding, fraction: 0, detail: "Lecture de la vidéo")
+                                model.progress = AnalysisProgress(stage: .decoding, fraction: 0, detail: String(localized: "Reading video", bundle: .module))
                                 return true
                             }
                             guard retry else { return }
@@ -676,7 +676,7 @@ public final class AppModel: Identifiable {
                     let cancelled = Task.isCancelled || error is CancellationError
                     let failedAttempt = attempt
                     let message = error is ReconstructionError
-                        ? "La vidéo a changé pendant l’analyse. Relancez l’analyse."
+                        ? String(localized: "The video changed during analysis. Run the analysis again.", bundle: .module)
                         : error.localizedDescription
                     await MainActor.run {
                         guard model.acceptsAnalysis(session: session, attempt: failedAttempt) else { return }
@@ -685,7 +685,7 @@ public final class AppModel: Identifiable {
                         model.analysisOutcome = cancelled ? .cancelled : .failed(message)
                         model.analysisOperation = nil
                         if cancelled {
-                            model.progress = AnalysisProgress(stage: .cancelled, fraction: 0, detail: "Analyse annulée")
+                            model.progress = AnalysisProgress(stage: .cancelled, fraction: 0, detail: String(localized: "Analysis Cancelled", bundle: .module))
                         } else {
                             model.errorMessage = message
                         }
@@ -697,12 +697,12 @@ public final class AppModel: Identifiable {
 
     private nonisolated static func catalogWarning(_ catalog: ScreenCatalog) -> String? {
         if catalog.recognitionFailures > 0 {
-            return "Analyse incomplète pour \(catalog.recognitionFailures) capture(s). Toutes les captures sont conservées."
+            return String(localized: "Analysis incomplete for \(catalog.recognitionFailures) screenshots. All screenshots are retained.", bundle: .module)
         }
         if catalog.errorDescription != nil {
             return catalog.visionNames > 0
-                ? "Organisation partielle : \(catalog.visionNames) capture(s) nommée(s). Toutes les captures restent disponibles."
-                : "L’organisation des captures n’a pas pu être terminée. Toutes les captures restent disponibles."
+                ? String(localized: "Partial organization: \(catalog.visionNames) screenshots named. All screenshots remain available.", bundle: .module)
+                : String(localized: "Screenshot organization could not be completed. All screenshots remain available.", bundle: .module)
         }
         return nil
     }
@@ -760,7 +760,7 @@ public final class AppModel: Identifiable {
                     catalog = try await analyzer.analyze(fileURLs: files) { fraction, _ in
                         await MainActor.run {
                             guard let self, self.acceptsRefinement(session: session, request: request, ids: ids) else { return }
-                            self.refinementOperation?.detail = "Affinage des captures… \(fraction.formatted(.percent.precision(.fractionLength(0))))"
+                            self.refinementOperation?.detail = String(localized: "Refining screenshots… \(fraction.formatted(.percent.precision(.fractionLength(0))))", bundle: .module)
                         }
                     }
                 }
@@ -773,9 +773,9 @@ public final class AppModel: Identifiable {
                 let namedFiles = try await ScreenshotExporter.prepareNamedFiles(files: files, screenNames: catalog.classifications.map(\.name))
                 self.applyRefinement(classifications: catalog.classifications, files: namedFiles, expectedIDs: ids)
                 if catalog.recognitionFailures > 0 {
-                    self.notice = "Affinage incomplet pour \(catalog.recognitionFailures) capture(s). Toutes les captures restent disponibles."
+                    self.notice = String(localized: "Refinement incomplete for \(catalog.recognitionFailures) screenshots. All screenshots remain available.", bundle: .module)
                 } else if catalog.errorDescription != nil {
-                    self.notice = "L’affinage des captures n’a pas pu être terminé. Les résultats locaux restent disponibles."
+                    self.notice = String(localized: "Screenshot refinement could not be completed. Local results remain available.", bundle: .module)
                 }
                 if catalog.recognitionFailures == 0, catalog.errorDescription == nil, let context,
                    let snapshot = CachedAnalysis(result: context.result, catalog: catalog) {
@@ -787,7 +787,7 @@ public final class AppModel: Identifiable {
             } catch {
                 guard let self, self.acceptsRefinement(session: session, request: request, ids: ids) else { return }
                 if !(error is CancellationError) && !Task.isCancelled {
-                    self.notice = "Affinage interrompu : \(error.localizedDescription). Les résultats locaux restent disponibles."
+                    self.notice = String(localized: "Refinement interrupted: \(error.localizedDescription). Local results remain available.", bundle: .module)
                 }
                 self.refinementOutcome = error is CancellationError || Task.isCancelled ? .cancelled : .failed(error.localizedDescription)
                 self.refinementOperation = nil
@@ -914,9 +914,9 @@ public final class AppModel: Identifiable {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         if pasteboard.writeObjects(files.map { $0 as NSURL }) {
-            notice = "\(files.count) capture\(files.count == 1 ? "" : "s") copiée\(files.count == 1 ? "" : "s")."
+            notice = String(localized: "\(files.count) screenshots copied.", bundle: .module)
         } else {
-            errorMessage = "Impossible de copier les captures sélectionnées."
+            errorMessage = String(localized: "Could not copy the selected screenshots.", bundle: .module)
         }
     }
 
@@ -932,7 +932,7 @@ public final class AppModel: Identifiable {
             })
         }
         return .singleFolder(visibleScreenshots.filter { selectedScreenshotIDs.contains($0.id) }.map {
-            .init(sourceURL: $0.fileURL, screenName: screenClassifications[$0.id]?.name ?? "À identifier")
+            .init(sourceURL: $0.fileURL, screenName: screenClassifications[$0.id]?.name ?? String(localized: "Unidentified", bundle: .module))
         })
     }
 
@@ -971,14 +971,14 @@ public final class AppModel: Identifiable {
                     model.saveOutcome = .completed
                     model.saveOperation = nil
                     model.exportedFolderURL = folderURL
-                    model.notice = "\(copied.count) capture\(copied.count == 1 ? "" : "s") enregistrée\(copied.count == 1 ? "" : "s")."
+                    model.notice = String(localized: "\(copied.count) screenshots saved.", bundle: .module)
                 }
             } catch is CancellationError {
                 await MainActor.run {
                     guard model.saveOperation?.id == token else { return }
                     model.saveOutcome = .cancelled
                     model.saveOperation = nil
-                    model.notice = "Enregistrement annulé"
+                    model.notice = String(localized: "Save cancelled", bundle: .module)
                 }
             } catch {
                 let message = error.localizedDescription
@@ -998,13 +998,13 @@ public final class AppModel: Identifiable {
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
-        panel.prompt = "Enregistrer ici"
+        panel.prompt = String(localized: "Save Here", bundle: .module)
         let layout: String
         switch plan {
-        case .singleFolder: layout = "dans un seul dossier, numérotés dans l’ordre de la timeline"
-        case .screenFolders: layout = "dans un dossier par écran, numérotés dans l’ordre de la timeline"
+        case .singleFolder: layout = String(localized: "Choose a folder for \(plan.fileCount) full-resolution PNGs, numbered in timeline order.", bundle: .module)
+        case .screenFolders: layout = String(localized: "Choose a folder for \(plan.fileCount) full-resolution PNGs, organized by screen and numbered in timeline order.", bundle: .module)
         }
-        panel.message = "Choisissez un dossier pour \(plan.fileCount) PNG en pleine résolution, \(layout)."
+        panel.message = layout
         return panel.runModal() == .OK ? panel.url : nil
     }
 

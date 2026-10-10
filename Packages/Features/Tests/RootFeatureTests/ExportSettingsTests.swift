@@ -123,7 +123,7 @@ struct ExportSettingsTests {
         let uniquePlan = ScreenshotExportPlan.screenFolders([
             .init(screenName: "Compte", sourceURLs: [files[0], files[2]]),
             .init(screenName: "Compte", sourceURLs: [files[1]]),
-            .init(screenName: "À identifier", sourceURLs: [files[4], files[5]])
+            .init(screenName: String(localized: "Unidentified", bundle: .module), sourceURLs: [files[4], files[5]])
         ])
         #expect(model.makeSelectionExportPlan() == uniquePlan)
         #expect(uniquePlan.fileCount == 5)
@@ -132,7 +132,7 @@ struct ExportSettingsTests {
         #expect(model.makeSelectionExportPlan() == .screenFolders([
             .init(screenName: "Compte", sourceURLs: [files[0], files[2], files[3]]),
             .init(screenName: "Compte", sourceURLs: [files[1]]),
-            .init(screenName: "À identifier", sourceURLs: [files[4], files[5]])
+            .init(screenName: String(localized: "Unidentified", bundle: .module), sourceURLs: [files[4], files[5]])
         ]))
         model.setUniqueScreens(true)
         #expect(model.makeSelectionExportPlan() == uniquePlan)

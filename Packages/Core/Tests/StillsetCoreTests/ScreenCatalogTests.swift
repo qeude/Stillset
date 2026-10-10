@@ -136,13 +136,14 @@ struct ScreenCatalogTests {
         #expect(result.usedContextualNaming == false)
         #expect(result.recognitionFailures == 1)
         let labels = result.classifications
-        #expect(labels[0].name == "Capture à examiner")
+        #expect(labels[0].name == String(localized: "Screenshot to Review", bundle: .module))
         #expect(labels[0].screenID == labels[1].screenID)
         #expect(labels[0].screenID != labels[2].screenID)
         #expect(labels[0].screenID == labels[3].screenID)
         #expect(labels[4].screenID != labels[5].screenID)
         let named = try await ScreenshotExporter.prepareNamedFiles(files: Array(files.prefix(4)), screenNames: Array(labels.prefix(4)).map(\.name))
-        #expect(named.map(\.lastPathComponent) == ["001_capture-a-examiner.png", "002_capture-a-examiner.png", "003_capture-a-examiner.png", "004_capture-a-examiner.png"])
+        let slug = Bundle.module.preferredLocalizations.first == "fr" ? "capture-a-examiner" : "screenshot-to-review"
+        #expect(named.map(\.lastPathComponent) == (1...4).map { String(format: "%03d_", $0) + slug + ".png" })
         #expect(try Data(contentsOf: named[0]) == Data(contentsOf: home))
         #expect(FileManager.default.fileExists(atPath: home.path))
         let scrollResult = try await ScreenCatalogAnalyzer().analyze(fileURLs: [home, scroll], useContextualNaming: false)
@@ -198,7 +199,7 @@ struct ScreenCatalogTests {
                                                                        recognizeTitle: recognize) {
             throw LanguageModelError.guardrailViolation(.init(debugDescription: "Blocked"))
         }
-        #expect(knownEmpty.name == "Capture à examiner" && knownEmpty.error != nil && !knownEmpty.usedVision)
+        #expect(knownEmpty.name == String(localized: "Screenshot to Review", bundle: .module) && knownEmpty.error != nil && !knownEmpty.usedVision)
         #expect(await fallback.value == 0)
         let missing = try await ScreenSemanticNamer.nameWithFallback(url, recognizedTitle: .missing,
                                                                     recognizeTitle: recognize) {

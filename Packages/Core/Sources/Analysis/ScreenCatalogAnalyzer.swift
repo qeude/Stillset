@@ -266,12 +266,12 @@ public actor ScreenCatalogAnalyzer {
         let needsPrepared = useContextualNaming && !cached && firstDigest.map { completeEvidence[$0] == nil } == true
         let preparedTask = try await preparedRecognition?.task(matching: needsPrepared ? firstDigest : nil)
         if cached, let previousCatalog {
-            try await onProgress(1, "Résultats réutilisés")
+            try await onProgress(1, String(localized: "Results reused", bundle: .module))
             return previousCatalog
         }
         var savedSources = sources
         var savedNames: [Int: ScreenNameResult] = [:]
-        var labels = sources.map { ScreenClassification(screenID: $0 + 1, name: "Capture à examiner") }
+        var labels = sources.map { ScreenClassification(screenID: $0 + 1, name: String(localized: "Screenshot to Review", bundle: .module)) }
         var contextual = false
         var visionNames = 0
         var errorDescription: String?
@@ -315,7 +315,7 @@ public actor ScreenCatalogAnalyzer {
                 catch is CancellationError { throw CancellationError() }
                 catch { return (index, nil) }
             }) { count in
-                try await onProgress(Double(count) / Double(pendingOCR.count) * 0.1, "Lecture des écrans avec Vision")
+                try await onProgress(Double(count) / Double(pendingOCR.count) * 0.1, String(localized: "Reading screens with Vision", bundle: .module))
             }
             var samples = [[UInt8]?](repeating: nil, count: fileURLs.count)
             for (index, evidence) in readings {
@@ -372,12 +372,12 @@ public actor ScreenCatalogAnalyzer {
                     } catch is CancellationError { throw CancellationError() }
                     catch {
                         Logger(subsystem: "com.stillflow.app", category: "ImageAnalysis").error("Image comparison failed: \(String(describing: error), privacy: .public)")
-                        errorDescription = "Apple Intelligence : \(error.localizedDescription)"
+                        errorDescription = String(localized: "Apple Intelligence: \(error.localizedDescription)", bundle: .module)
                     }
                 }
                 if stateSources[index] == index { representatives.append(index) }
                 try await onProgress(Double(index + 1) / Double(fileURLs.count) * 0.3 + 0.1,
-                                 "Regroupement des états : \(index + 1) sur \(fileURLs.count)")
+                                 String(localized: "Grouping states: \(index + 1) of \(fileURLs.count)", bundle: .module))
             }
             savedSources = stateSources
             let names = try await ScreenSemanticNamer.classify(
@@ -418,7 +418,7 @@ public actor ScreenCatalogAnalyzer {
             previousSources = savedSources
             previousNames = savedNames
         }
-        try await onProgress(1, "Captures prêtes")
+        try await onProgress(1, String(localized: "Screenshots ready", bundle: .module))
         try Task.checkCancellation()
         return catalog
     }

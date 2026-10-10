@@ -27,23 +27,23 @@ public struct StillsetRootView: View {
         .toolbar {
             if !session.imports.models.isEmpty {
                 ToolbarItem {
-                    Button("Ouvrir des enregistrements…", systemImage: "plus", action: openVideos)
+                    Button(LocalizedStringResource("Open Recordings…", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "plus", action: openVideos)
                         .labelStyle(.iconOnly)
-                        .help("Ouvrir une nouvelle session…")
+                        .help(Text("Open a new session…", bundle: .module))
                 }
                 ToolbarSpacer(.flexible)
                 ToolbarItem { filtersMenu }
                 ToolbarItem {
-                    Button("Affiner avec l’IA…", systemImage: "sparkles", action: session.refineScreens)
+                    Button(LocalizedStringResource("Refine with AI…", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "sparkles", action: session.refineScreens)
                         .labelStyle(.iconOnly)
                         .disabled(session.catalogSnapshot.inputs.isEmpty || session.refinementDetail != nil)
-                        .help("Affiner avec l’IA")
+                        .help(Text("Refine with AI", bundle: .module))
                 }
                 ToolbarItem {
-                    Button("Exporter…", systemImage: "square.and.arrow.up", action: session.saveSelection)
+                    Button(LocalizedStringResource("Export…", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "square.and.arrow.up", action: session.saveSelection)
                         .labelStyle(.iconOnly)
                         .disabled(!session.canSaveSelection)
-                        .help("Exporter la sélection")
+                        .help(Text("Export selection", bundle: .module))
                 }
             }
         }
@@ -61,19 +61,19 @@ public struct StillsetRootView: View {
 
     private var filtersMenu: some View {
         Menu {
-            Picker("Captures", selection: Binding(get: { session.showsUniqueScreens }, set: session.setUniqueScreens)) {
-                Text("Uniques").tag(true)
-                Text("Toutes").tag(false)
+            Picker(LocalizedStringResource("Screenshots", bundle: .atURL(Bundle.module.bundleURL)), selection: Binding(get: { session.showsUniqueScreens }, set: session.setUniqueScreens)) {
+                Text("Unique", bundle: .module).tag(true)
+                Text("All", bundle: .module).tag(false)
             }.pickerStyle(.inline)
             Divider()
-            Picker("Organisation", selection: Binding(get: { session.groupsTimelineByScreen }, set: session.setTimelineGrouping)) {
-                Text("Chronologie").tag(false)
-                Text("Par écran").tag(true)
+            Picker(LocalizedStringResource("Organization", bundle: .atURL(Bundle.module.bundleURL)), selection: Binding(get: { session.groupsTimelineByScreen }, set: session.setTimelineGrouping)) {
+                Text("Chronology", bundle: .module).tag(false)
+                Text("By Screen", bundle: .module).tag(true)
             }.pickerStyle(.inline)
-        } label: { Label("Filtres", systemImage: "line.3.horizontal.decrease") }
+        } label: { Label(LocalizedStringResource("Filters", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "line.3.horizontal.decrease") }
         .labelStyle(.iconOnly)
-        .help("Filtres")
-        .accessibilityValue("\(session.showsUniqueScreens ? "Captures uniques" : "Toutes les captures"), \(session.groupsTimelineByScreen ? "Par écran" : "Chronologie")")
+        .help(Text("Filters", bundle: .module))
+        .accessibilityValue("\(session.showsUniqueScreens ? String(localized: "Unique screenshots", bundle: .module) : String(localized: "All screenshots", bundle: .module)), \(session.groupsTimelineByScreen ? String(localized: "By Screen", bundle: .module) : String(localized: "Chronology", bundle: .module))")
     }
 }
 
@@ -101,13 +101,13 @@ struct SessionStatusButton: View {
         .buttonBorderShape(.capsule)
         .controlSize(.regular)
         .tint(.primary)
-        .accessibilityLabel("Vidéos de la session")
+        .accessibilityLabel(LocalizedStringResource("Session Videos", bundle: .atURL(Bundle.module.bundleURL)))
         .accessibilityValue(statusSummary)
-        .help("Vidéos de la session")
+        .help(Text("Session Videos", bundle: .module))
         .popover(isPresented: $showsStatus) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Vidéos de la session").font(.headline)
+                    Text("Session Videos", bundle: .module).font(.headline)
                     VStack(spacing: 0) {
                         ForEach(Array(session.imports.models.enumerated()), id: \.element.id) { index, model in
                             if index > 0 { Divider() }
@@ -117,12 +117,12 @@ struct SessionStatusButton: View {
                     if let detail = session.catalogDetail { Text(detail).font(.caption) }
                     if let detail = session.refinementDetail {
                         Text(detail).font(.caption)
-                        Button("Arrêter l’affinage", action: session.cancelRefinement)
+                        Button(LocalizedStringResource("Stop Refinement", bundle: .atURL(Bundle.module.bundleURL)), action: session.cancelRefinement)
                     }
                     if session.isExporting {
                         Text(session.progress.detail).font(.caption)
                         ProgressView(value: session.progress.fraction)
-                        Button("Annuler l’export", action: session.cancelExport)
+                        Button(LocalizedStringResource("Cancel Export", bundle: .atURL(Bundle.module.bundleURL)), action: session.cancelExport)
                     }
                 }
                 .padding(16)
@@ -137,7 +137,7 @@ struct SessionStatusButton: View {
         let models = session.imports.models
         let pending = models.filter { $0.importState.isPending }.count
         let failures = models.filter { $0.importState.failure != nil }.count
-        return "\(models.count) vidéos · \(pending) en cours" + (failures > 0 ? " · \(failures) échec(s)" : "")
+        return String(localized: "Videos: \(models.count) · In progress: \(pending) · Failed: \(failures)", bundle: .module)
     }
 }
 
@@ -154,7 +154,7 @@ private struct VideoImportRow: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
-                .accessibilityLabel("Vidéo \(model.importOrdinal)")
+                .accessibilityLabel(LocalizedStringResource("Video \(model.importOrdinal)", bundle: .atURL(Bundle.module.bundleURL)))
             VStack(alignment: .leading, spacing: 5) {
                 Text(verbatim: model.displayName)
                     .font(.callout.weight(.semibold))
@@ -182,36 +182,36 @@ private struct VideoImportRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if model.importState.canRetry {
-                Button("Réessayer", systemImage: "arrow.clockwise") { imports.retry(model) }
+                Button(LocalizedStringResource("Retry", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "arrow.clockwise") { imports.retry(model) }
                     .buttonStyle(.borderedProminent)
                     .buttonBorderShape(.capsule)
                     .tint(StillsetStyle.accent)
                     .controlSize(.small)
                     .fixedSize()
                     .disabled(!imports.canRetry(model))
-                    .help("Ajouter un nouvel essai à la fin de la file")
+                    .help(Text("Add a new attempt at the end of the queue", bundle: .module))
             } else if model.importState == .completed || model.importState == .review {
-                Button("Réanalyser", systemImage: "arrow.clockwise") { imports.reanalyze(model) }
+                Button(LocalizedStringResource("Reanalyze", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "arrow.clockwise") { imports.reanalyze(model) }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .disabled(!imports.canReanalyze(model))
-                    .help("Ajouter une nouvelle analyse sans réutiliser le cache")
+                    .help(Text("Add a new analysis without reusing the cache", bundle: .module))
             } else if model.importState == .queued {
-                Button("Retirer", systemImage: "minus.circle") { imports.remove(model) }
+                Button(LocalizedStringResource("Remove", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "minus.circle") { imports.remove(model) }
                     .buttonStyle(.bordered)
                     .tint(.primary)
                     .buttonBorderShape(.capsule)
                     .controlSize(.small)
                     .fixedSize()
-                    .help("Retirer cette vidéo en attente")
+                    .help(Text("Remove this queued video", bundle: .module))
             } else if model.importState == .running {
-                Button("Annuler", systemImage: "stop.circle", action: model.cancel)
+                Button(LocalizedStringResource("Cancel", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "stop.circle", action: model.cancel)
                     .buttonStyle(.bordered)
                     .tint(.primary)
                     .buttonBorderShape(.capsule)
                     .controlSize(.small)
                     .fixedSize()
-                    .help("Annuler l’analyse de cette vidéo")
+                    .help(Text("Cancel analysis for this video", bundle: .module))
             }
         }
         .padding(.vertical, 12)

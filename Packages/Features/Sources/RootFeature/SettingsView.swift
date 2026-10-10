@@ -9,21 +9,21 @@ public struct SettingsView: View {
 
     public var body: some View {
         Form {
-            Section("Par défaut pour la prochaine session") {
-                Picker("Captures", selection: $preferences.captureDefault) {
-                    Text("Uniques").tag(AppPreferences.CaptureDefault.uniques)
-                    Text("Toutes").tag(AppPreferences.CaptureDefault.all)
+            Section(LocalizedStringResource("Defaults for the Next Session", bundle: .atURL(Bundle.module.bundleURL))) {
+                Picker(LocalizedStringResource("Screenshots", bundle: .atURL(Bundle.module.bundleURL)), selection: $preferences.captureDefault) {
+                    Text("Unique", bundle: .module).tag(AppPreferences.CaptureDefault.uniques)
+                    Text("All", bundle: .module).tag(AppPreferences.CaptureDefault.all)
                 }
-                Picker("Organisation", selection: $preferences.organisationDefault) {
-                    Text("Chronologie").tag(AppPreferences.OrganisationDefault.chronology)
-                    Text("Par écran").tag(AppPreferences.OrganisationDefault.byScreen)
+                Picker(LocalizedStringResource("Organization", bundle: .atURL(Bundle.module.bundleURL)), selection: $preferences.organisationDefault) {
+                    Text("Chronology", bundle: .module).tag(AppPreferences.OrganisationDefault.chronology)
+                    Text("By Screen", bundle: .module).tag(AppPreferences.OrganisationDefault.byScreen)
                 }
             }
 
             Section {
-                Picker("Export par écran", selection: $preferences.screenExportLayout) {
-                    Text("Un seul dossier").tag(AppPreferences.ScreenExportLayout.singleFolder)
-                    Text("Un dossier par écran").tag(AppPreferences.ScreenExportLayout.folders)
+                Picker(LocalizedStringResource("Export by Screen", bundle: .atURL(Bundle.module.bundleURL)), selection: $preferences.screenExportLayout) {
+                    Text("One Folder", bundle: .module).tag(AppPreferences.ScreenExportLayout.singleFolder)
+                    Text("One Folder per Screen", bundle: .module).tag(AppPreferences.ScreenExportLayout.folders)
                 }
             }
         }
