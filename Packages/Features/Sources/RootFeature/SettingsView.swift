@@ -31,5 +31,7 @@ public struct SettingsView: View {
         .frame(width: 480)
         .fixedSize(horizontal: false, vertical: true)
         .padding()
+        .tint(StillsetStyle.accent)
+        .background { StillsetBackground() }
     }
 }

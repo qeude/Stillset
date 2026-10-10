@@ -22,7 +22,7 @@ public struct StillsetRootView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .tint(StillsetStyle.accent)
-        .background { StillsetStyle.background.ignoresSafeArea() }
+        .background { StillsetBackground() }
         .navigationTitle("Stillset")
         .toolbar {
             if !session.imports.models.isEmpty {
