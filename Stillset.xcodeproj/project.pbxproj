@@ -7,11 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		41A718B7C0D541DC968B9AB1 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 41A718B7C0D541DC968B9AB2 /* AppIcon.icon */; };
 		637136382026B22E82F87F36 /* StillsetFeatures in Frameworks */ = {isa = PBXBuildFile; productRef = 02DDD8E94AF81CCE64ED01F5 /* StillsetFeatures */; };
 		F1E6917E55478FCE986A3E21 /* StillsetApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1479EADDBE5E02498FD3348 /* StillsetApp.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		41A718B7C0D541DC968B9AB2 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 		3F22515FDF8ADF80D8DAB29F /* Stillset.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Stillset.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E1479EADDBE5E02498FD3348 /* StillsetApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StillsetApp.swift; sourceTree = "<group>"; };
 		EA28CE9F95C8E0242C00C921 /* Features */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Features; path = Packages/Features; sourceTree = SOURCE_ROOT; };
@@ -49,6 +51,7 @@
 		9469A9075FE8952051CE75EB /* App */ = {
 			isa = PBXGroup;
 			children = (
+				41A718B7C0D541DC968B9AB2 /* AppIcon.icon */,
 				E1479EADDBE5E02498FD3348 /* StillsetApp.swift */,
 			);
 			path = App;
@@ -71,6 +74,7 @@
 			buildPhases = (
 				B10C28CBA400A54CA1976458 /* Sources */,
 				94C135CD6A02144E35FEF19D /* Frameworks */,
+				41A718B7C0D541DC968B9AB3 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -114,6 +118,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		41A718B7C0D541DC968B9AB3 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				41A718B7C0D541DC968B9AB1 /* AppIcon.icon in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		B10C28CBA400A54CA1976458 /* Sources */ = {
