@@ -68,6 +68,7 @@ struct RecentAnalysisCacheTests {
         let file = try #require(try cacheFiles(root).first)
         let valid = try Data(contentsOf: file)
         let mutations: [(inout [String: Any]) -> Void] = [
+            { $0["language"] = "unsupported" },
             { $0["schemaVersion"] = 999 }, { $0["analysisVersion"] = 999 },
             { $0["duration"] = -1 }, { $0["recognitionFailures"] = 4 },
             { $0["lastUsedAt"] = 9_999_999_999.0 },

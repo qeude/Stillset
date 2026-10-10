@@ -4,6 +4,12 @@ Stillset turns `.mov` and `.mp4` screen recordings into representative screensho
 
 It retains pauses, scroll stops and repeat visits. The **Uniques** view groups equivalent screen states for review; **Toutes** restores every capture. Uncertain matches remain separate, and grouping never deletes a capture.
 
+## Languages
+
+Stillset supports English and French and follows the macOS app language preference, with English as the fallback. Menus, controls, accessibility labels, progress and errors are localized. Recognized text keeps the recording’s original wording; optional AI screen names follow the app language. Recent analysis metadata is reused only in the language in which it was generated.
+
+Translations live in `App/Localizable.xcstrings` and each package’s `Sources/Resources/Localizable.xcstrings`.
+
 ## Requirements
 
 - macOS 27 or later.

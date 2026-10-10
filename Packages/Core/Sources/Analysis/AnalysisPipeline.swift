@@ -19,7 +19,7 @@ public enum AnalysisPipeline {
         let (states, finalState) = try await work.perform { await accumulator.finish() }
         if let finalState { try await onDetectedScreens([finalState]) }
         guard !states.isEmpty else { throw VideoAnalysisError.noStableStates }
-        try await onProgress(AnalysisProgress(stage: .complete, fraction: 1, detail: "\(states.count.formatted()) screenshots ready"))
+        try await onProgress(AnalysisProgress(stage: .complete, fraction: 1, detail: String(localized: "\(states.count.formatted()) screenshots ready", bundle: .module)))
         try Task.checkCancellation()
         return AnalysisResult(sourceURL: url, duration: duration, states: states)
     }

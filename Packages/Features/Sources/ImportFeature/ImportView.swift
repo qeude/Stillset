@@ -9,11 +9,11 @@ struct ImportView: View {
                 .frame(maxWidth: 500)
                 .frame(height: 300)
 
-            Text("Déposez vos vidéos")
+            Text("Drop Your Videos", bundle: .module)
                 .font(.system(size: 29, weight: .semibold))
                 .foregroundStyle(StillsetStyle.ink)
 
-            Button("Ouvrir…", action: chooseVideos)
+            Button(LocalizedStringResource("Open…", bundle: .atURL(Bundle.module.bundleURL)), action: chooseVideos)
                 .buttonStyle(.borderedProminent)
                 .buttonBorderShape(.capsule)
                 .controlSize(.large)
@@ -65,8 +65,8 @@ private struct VideoFanArtwork: View {
             .frame(width: 420, height: 300)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Rejouer l’animation de capture")
-        .help("Rejouer l’animation")
+        .accessibilityLabel(LocalizedStringResource("Replay the capture animation", bundle: .atURL(Bundle.module.bundleURL)))
+        .help(Text("Replay animation", bundle: .module))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             guard !reduceMotion else {

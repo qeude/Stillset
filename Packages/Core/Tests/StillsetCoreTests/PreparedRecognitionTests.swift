@@ -174,7 +174,7 @@ struct PreparedRecognitionTests {
         prepared.start(fileURL: fixture.files[0])
         let result = try await ScreenCatalogAnalyzer().analyze(
             fileURLs: [fixture.files[0]], useFoundationModels: false, preparedRecognition: prepared)
-        #expect(result.classifications == [ScreenClassification(screenID: 1, name: "Capture à examiner")])
+        #expect(result.classifications == [ScreenClassification(screenID: 1, name: String(localized: "Screenshot to Review", bundle: .module))])
         #expect(result.errorDescription != nil)
         #expect(result.recognitionFailures == 1)
     }
