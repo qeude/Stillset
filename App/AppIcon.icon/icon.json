@@ -1,0 +1,148 @@
+{
+  "features": [
+    "refractivity"
+  ],
+  "fill-specializations": [
+    {
+      "value": {
+        "linear-gradient": [
+          "srgb:0.21,0.105,0.235,1",
+          "srgb:0.085,0.027,0.103,1"
+        ]
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": {
+        "linear-gradient": [
+          "srgb:0.13,0.055,0.15,1",
+          "srgb:0.045,0.017,0.055,1"
+        ]
+      }
+    }
+  ],
+  "groups": [
+    {
+      "blur-material": 0,
+      "layers": [
+        {
+          "fill": {
+            "linear-gradient": [
+              "srgb:0.99,0.97,0.995,1",
+              "srgb:0.88,0.80,0.90,1"
+            ]
+          },
+          "glass": false,
+          "image-name": "corners.svg",
+          "name": "corners",
+          "opacity": 1
+        }
+      ],
+      "lighting": "combined",
+      "name": "corners",
+      "position": {
+        "scale": 1.12,
+        "translation-in-points": [0, 0]
+      },
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.07
+      },
+      "specular": false,
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    },
+    {
+      "blur-material": 0,
+      "layers": [
+        {
+          "fill-specializations": [
+            {
+              "value": {
+                "linear-gradient": [
+                  "srgb:0.78,0.14,0.76,1",
+                  "srgb:0.55,0.075,0.545,1"
+                ]
+              }
+            },
+            {
+              "appearance": "dark",
+              "value": {
+                "linear-gradient": [
+                  "srgb:0.96,0.36,0.89,1",
+                  "srgb:0.66,0.16,0.63,1"
+                ]
+              }
+            }
+          ],
+          "glass": false,
+          "image-name": "still.svg",
+          "name": "still",
+          "opacity": 1
+        }
+      ],
+      "lighting": "combined",
+      "name": "still",
+      "position": {
+        "scale": 1.12,
+        "translation-in-points": [0, 0]
+      },
+      "refractivity": {
+        "depth": 0.08,
+        "enabled": false,
+        "strength": 0.12
+      },
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.07
+      },
+      "specular": false,
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    },
+    {
+      "blur-material": 0,
+      "layers": [
+        {
+          "fill": {
+            "linear-gradient": [
+              "srgb:0.59,0.45,0.63,1",
+              "srgb:0.31,0.20,0.35,1"
+            ]
+          },
+          "glass": true,
+          "image-name": "film.svg",
+          "name": "film",
+          "opacity": 0.9
+        }
+      ],
+      "lighting": "combined",
+      "name": "film",
+      "position": {
+        "scale": 1.12,
+        "translation-in-points": [0, 0]
+      },
+      "refractivity": {
+        "depth": 0.08,
+        "enabled": false,
+        "strength": 0.12
+      },
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.07
+      },
+      "specular": false,
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}
