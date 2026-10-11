@@ -1,6 +1,23 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Export Diagnostic…": {
+      "comment": "Local diagnostic export. The report stays on the Mac until the user shares it.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Export Diagnostic…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exporter un diagnostic…"
+          }
+        }
+      }
+    },
     "Add Videos to Session…": {
       "localizations": {
         "en": {

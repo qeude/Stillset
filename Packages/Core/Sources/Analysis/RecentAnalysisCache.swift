@@ -59,7 +59,7 @@ public actor RecentAnalysisCache {
     private let now: @Sendable () -> Date
 
     public init(directory: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("com.stillflow.app/RecentAnalysis", isDirectory: true)) {
+        .appendingPathComponent("com.qeude.stillset/RecentAnalysis", isDirectory: true)) {
         self.directory = directory
         limits = Limits()
         now = { Date() }

@@ -208,7 +208,7 @@ actor RunDelivery {
     }
 }
 
-let processingSignposter = OSSignposter(subsystem: "com.stillflow.app", category: "ProcessingPublication")
+let processingSignposter = OSSignposter(subsystem: "com.qeude.stillset", category: "ProcessingPublication")
 
 final class SessionProcessing: Sendable {
     let budget = ProcessingBudget()

@@ -13,7 +13,7 @@ Choose **Stillset → Réglages…** (⌘,) from the app menu. The grouped form 
 
 ## Driving it with `cua_repl`
 
-Launch the native app through the native Xcode MCP and resolve `com.stillflow.app` from run metadata. Use `cua_repl` only: inspect with `app.getAXState()`, select current native AX labels, and click only indexes freshly observed after reading that state. Open **Stillset → Réglages…** (or press ⌘,) and re-read the tree after the window opens. Change each picker by its visible accessibility label and current option, then read the tree again to confirm the selected value.
+Launch the native app through the native Xcode MCP and resolve `com.qeude.stillset` from run metadata. Use `cua_repl` only: inspect with `app.getAXState()`, select current native AX labels, and click only indexes freshly observed after reading that state. Open **Stillset → Réglages…** (or press ⌘,) and re-read the tree after the window opens. Change each picker by its visible accessibility label and current option, then read the tree again to confirm the selected value.
 
 To verify that defaults affect the next session, note current-session filter state, change a setting, then open a replacement session using ⌘O and a suitable recording; inspect **Filtres** in the new session. For the folder setting, choose **Par écran**, select **Un dossier par écran**, and export to a reviewable destination; capture the visible saved folder structure. Do not claim an export-layout result from the picker alone.
 
