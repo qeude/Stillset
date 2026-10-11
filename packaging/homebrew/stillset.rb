@@ -8,7 +8,7 @@ cask "stillset" do
   homepage "https://github.com/qeude/Stillset"
 
   depends_on arch: :arm64
-  depends_on macos: ">= :golden_gate"
+  depends_on macos: :golden_gate
 
   app "Stillset.app"
 
