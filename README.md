@@ -94,6 +94,10 @@ swift test --package-path Packages/Features
 
 Tests generate synthetic inputs and do not need private recordings or an available Apple Intelligence model. GitHub Actions builds the app and runs both suites on the macOS 27/Xcode 27 preview runner. See [testing and profiling](docs/testing.md) for optional checks and [analysis internals](docs/analysis.md) for the matching policy.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report bugs with the [issue form](https://github.com/qeude/Stillset/issues/new/choose) and vulnerabilities through [SECURITY.md](SECURITY.md).
+
 ## License
 
 [MIT](LICENSE).
