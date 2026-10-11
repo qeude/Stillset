@@ -12,21 +12,19 @@ A manual run from `main` builds and signs the app without publishing it.
 
 Every release must be signed with the same certificate. A new certificate changes the app's code-signing identity, so macOS treats updated builds as a different app.
 
-1. Create the certificate in your login keychain:
+1. Create the certificate and upload it to the `release` environment:
 
    ```sh
    ./script/setup_release_certificate.sh
    ```
 
-2. In Keychain Access, export the **Stillset Release** identity as a `.p12` file with a password. Store the file and password offline. If you lose them, you can't sign updates with the same identity.
-3. In the repository settings, create an environment named `release`, then add these secrets:
-   - `STILLSET_RELEASE_P12_BASE64`, set from `base64 -i Stillset-Release.p12`
-   - `STILLSET_RELEASE_P12_PASSWORD`
-   - `HOMEBREW_TAP_TOKEN`, a fine-grained token with contents and pull-request write access to `qeude/homebrew-tap`
-4. Add the repository variable `STILLSET_RELEASE_CERT_SHA1`, set to the certificate fingerprint:
+   The script saves the `.p12`, its password, and the public certificate in `~/Stillset Release Certificate`. It adds the identity to your login keychain, then sets the `STILLSET_RELEASE_P12_BASE64` and `STILLSET_RELEASE_P12_PASSWORD` secrets and the `STILLSET_RELEASE_CERT_SHA1` variable. Rerun it on another Mac with the same folder to reuse the certificate.
+
+2. Move that folder to your password manager or an offline backup, then delete the local copy. If you lose it, you can't sign updates with the same identity.
+3. Create a [fine-grained token](https://github.com/settings/personal-access-tokens/new) limited to `qeude/homebrew-tap`, with **Contents** and **Pull requests** set to read and write. Store it as a secret, pasting it when prompted:
 
    ```sh
-   security find-certificate -c 'Stillset Release' -p | openssl x509 -outform DER | shasum -a 1 | cut -d ' ' -f 1
+   gh secret set HOMEBREW_TAP_TOKEN --env release --repo qeude/Stillset
    ```
 
 ## Publish a version
