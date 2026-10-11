@@ -55,7 +55,7 @@ public enum VideoDecoder {
 
 private actor VideoFrameSource {
     private var reader: AVAssetReader?
-    private var output: AVAssetReaderTrackOutput?
+    private var provider: AVAssetReaderOutput.Provider<CMReadySampleBuffer<CMSampleBuffer.DynamicContent>>?
     private var transform = CGAffineTransform.identity
     private let generator = FrameProxyGenerator()
     private var lastColor: ContinuousClock.Instant?
@@ -71,25 +71,23 @@ private actor VideoFrameSource {
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
             kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
         ])
-        output.alwaysCopiesSampleData = false
-        guard reader.canAdd(output) else { throw VideoAnalysisError.cannotReadVideo }
-        reader.add(output)
-        guard reader.startReading() else { throw reader.error ?? VideoAnalysisError.cannotReadVideo }
+        provider = reader.outputProvider(for: output)
+        try reader.start()
         self.reader = reader
-        self.output = output
         return duration.isFinite ? max(0, duration) : 0
     }
 
-    func next(previewRequest: @Sendable () -> PreviewRequest?) throws -> [Frame]? {
-        guard let reader, let output else { throw VideoAnalysisError.cannotReadVideo }
+    func next(previewRequest: @Sendable () -> PreviewRequest?) async throws -> [Frame]? {
+        guard let reader, let provider else { throw VideoAnalysisError.cannotReadVideo }
         var samples: [VideoSample] = []
-        while samples.count < 8, let sample = output.copyNextSampleBuffer() {
+        let transform = transform
+        while samples.count < 8, let sample = try await provider.next() {
             try Task.checkCancellation()
-            guard let pixels = CMSampleBufferGetImageBuffer(sample) else { continue }
-            let timestamp = CMSampleBufferGetPresentationTimeStamp(sample).seconds
-            guard timestamp.isFinite else { continue }
-            samples.append(VideoSample(timestamp: timestamp,
-                image: CIImage(cvPixelBuffer: pixels).transformed(by: transform)))
+            let timestamp = sample.presentationTimeStamp.seconds
+            guard timestamp.isFinite, let image: CIImage = sample.withUnsafeSampleBuffer({ buffer in
+                CMSampleBufferGetImageBuffer(buffer).map { CIImage(cvPixelBuffer: $0).transformed(by: transform) }
+            }) else { continue }
+            samples.append(VideoSample(timestamp: timestamp, image: image))
         }
         if samples.isEmpty {
             guard reader.status == .completed else {
