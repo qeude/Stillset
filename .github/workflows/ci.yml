@@ -27,10 +27,11 @@ jobs:
           sw_vers
           xcodebuild -version
           swift --version
+      # Concurrent AVAssetReader decodes hang on the virtualized video decoder.
       - name: Test Core
-        run: swift test --package-path Packages/Core
+        run: swift test --package-path Packages/Core --no-parallel
       - name: Test Features
-        run: swift test --package-path Packages/Features
+        run: swift test --package-path Packages/Features --no-parallel
       - name: Build app
         run: >-
           xcodebuild -quiet
