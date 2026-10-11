@@ -25,4 +25,4 @@ xcrun dwarfdump --uuid /path/to/Stillset.app/Contents/MacOS/Stillset
 xcrun dwarfdump --uuid /path/to/Stillset.app.dSYM
 ```
 
-Retain both artifacts under that build's version and UUID. Symbolicate a reported crash against its matching build. Stillset currently has no automated release publication pipeline; symbol retention must be part of the packaging step when that pipeline is added.
+Retain both artifacts under that build's version and UUID. Symbolicate a reported crash against its matching build. The [release workflow](releasing.md) checks that the UUIDs match and attaches the `.dSYM` archive to each GitHub release.

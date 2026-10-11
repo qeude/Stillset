@@ -51,6 +51,18 @@ Translations live in `App/Localizable.xcstrings` and each package’s `Sources/R
 
 ## Get started
 
+Install with Homebrew on a Mac with Apple silicon and macOS 27 or later:
+
+```sh
+brew install --cask qeude/tap/stillset
+```
+
+Stillset is signed with a self-signed certificate and is not notarized.
+The Cask removes the quarantine attribute so the app can open.
+Install it only if you trust this source.
+
+### Build from source
+
 Build from source with **macOS 27 or later** and **Xcode 27 or later**.
 Make sure Xcode’s command-line tools are selected.
 

@@ -1,0 +1,138 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # Manual runs verify signing and packaging without publishing anything.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  validate:
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate version and source
+        id: version
+        env:
+          RELEASE_EVENT: ${{ github.event_name }}
+        run: |
+          version="$(xcodebuild -project Stillset.xcodeproj -scheme Stillset -configuration Release -showBuildSettings \
+            | awk '$1 == "MARKETING_VERSION" { print $3; exit }')"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          git merge-base --is-ancestor HEAD origin/main
+          if [[ "$RELEASE_EVENT" == push ]]; then
+            [[ "$GITHUB_REF" == "refs/tags/v$version" ]] || exit 1
+          else
+            [[ "$GITHUB_REF" == refs/heads/main ]] || exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - run: swift test --package-path Packages/Core
+      - run: swift test --package-path Packages/Features
+
+  release:
+    needs: validate
+    runs-on: xcode-27
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: write
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Import release identity into temporary keychain
+        env:
+          P12_BASE64: ${{ secrets.STILLSET_RELEASE_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.STILLSET_RELEASE_P12_PASSWORD }}
+          CERT_SHA1: ${{ vars.STILLSET_RELEASE_CERT_SHA1 }}
+        run: |
+          umask 077
+          test -n "$P12_BASE64"
+          test -n "$P12_PASSWORD"
+          test -n "$CERT_SHA1"
+          keychain="$RUNNER_TEMP/stillset-release.keychain-db"
+          keychain_password="$(openssl rand -hex 32)"
+          echo "::add-mask::$keychain_password"
+          printf '%s' "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/stillset-release.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/stillset-release.p12" -k "$keychain" \
+            -P "$P12_PASSWORD" -T /usr/bin/codesign >/dev/null
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain"
+          security find-certificate -c 'Stillset Release' -p "$keychain" > "$RUNNER_TEMP/stillset-release.cer"
+          # Pin the existing public certificate so updates retain their TCC identity.
+          fingerprint="$(openssl x509 -in "$RUNNER_TEMP/stillset-release.cer" -outform DER | shasum -a 1 | cut -d ' ' -f 1)"
+          [[ "$fingerprint" == "$CERT_SHA1" ]] || exit 1
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k "$keychain" "$RUNNER_TEMP/stillset-release.cer"
+      - name: Package signed arm64 app
+        run: ./script/package_release.sh
+      - name: Clean up signing material
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/stillset-release.keychain-db" ]]; then
+            security delete-keychain "$RUNNER_TEMP/stillset-release.keychain-db"
+          fi
+          rm -f "$RUNNER_TEMP/stillset-release.p12" "$RUNNER_TEMP/stillset-release.cer"
+      - name: Publish release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Never replace an already-published archive on a retry.
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            [[ "$(gh release view "v$VERSION" --json isDraft --jq .isDraft)" == true ]] || exit 1
+          else
+            gh release create "v$VERSION" --verify-tag --draft --generate-notes --title "Stillset v$VERSION"
+          fi
+          gh release upload "v$VERSION" "dist/Stillset-v$VERSION.zip" "dist/Stillset-v$VERSION.zip.sha256" \
+            "dist/Stillset-v$VERSION.dSYM.zip" --clobber
+          if [[ "$VERSION" == *-* ]]; then
+            gh release edit "v$VERSION" --draft=false --prerelease --latest=false
+          else
+            gh release edit "v$VERSION" --draft=false --latest
+          fi
+  homebrew:
+    needs: [validate, release]
+    if: github.event_name == 'push' && !contains(needs.validate.outputs.version, '-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: release
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Download published checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "v$VERSION" --pattern "Stillset-v$VERSION.zip.sha256" --dir "$RUNNER_TEMP"
+      - name: Open Homebrew update PR
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: ./script/update_homebrew_release.sh "$VERSION" "$RUNNER_TEMP/Stillset-v$VERSION.zip.sha256"
