@@ -367,8 +367,9 @@ public actor ScreenCatalogAnalyzer {
                     }
                     guard useFoundationModels && ScreenSemanticNamer.isAvailable else { continue }
                     do {
+                        // The model runs out of process, so it does not hold a lane or pay its cooldown.
                         let compare: @Sendable () async throws -> Bool = {
-                            try await work.perform { try await ScreenSemanticNamer.sameContent(fileURLs[previous], fileURLs[index]) }
+                            try await ScreenSemanticNamer.sameContent(fileURLs[previous], fileURLs[index])
                         }
                         let same = digests.count == fileURLs.count
                             ? try await cachedComparison(Set([digests[previous], digests[index]]), operation: compare)

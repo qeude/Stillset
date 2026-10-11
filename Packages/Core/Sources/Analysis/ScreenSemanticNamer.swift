@@ -92,8 +92,8 @@ enum ScreenSemanticNamer {
             })
         }
         let initialCount = results.count
-        let named = try await ScreenCatalogAnalyzer.orderedMap(Array(pending.enumerated()), work: work, operation: { item in
-            let (_, index) = item
+        // The model runs out of process, so naming does not hold a lane or pay its cooldown.
+        for (completed, index) in pending.enumerated() {
             let session = makeSession()
             let result = try await nameWithFallback(fileURLs[index], recognizedTitle: recognition[index].map { .known($0.title) } ?? .missing, diagnostics: diagnostics) {
                 guard isAvailable else { throw CocoaError(.featureUnsupported) }
@@ -111,12 +111,11 @@ enum ScreenSemanticNamer {
                 else { throw CocoaError(.coderInvalidValue) }
                 return response.content.formState.applying(to: name)
             }
-            return (index, result)
-        }) { completed in
-            try await onProgress(Double(initialCount + completed) / Double(representatives.count),
-                             String(localized: "Understanding the journey: \(initialCount + completed) of \(representatives.count) screens", bundle: .module))
+            results[index] = result
+            try Task.checkCancellation()
+            try await onProgress(Double(initialCount + completed + 1) / Double(representatives.count),
+                             String(localized: "Understanding the journey: \(initialCount + completed + 1) of \(representatives.count) screens", bundle: .module))
         }
-        for (index, result) in named { results[index] = result }
         try await onProgress(1, String(localized: "Screen names ready", bundle: .module))
         try Task.checkCancellation()
         return try sources.map { source in
