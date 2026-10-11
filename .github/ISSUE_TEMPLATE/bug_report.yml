@@ -1,0 +1,52 @@
+name: Bug report
+description: Report something that doesn't work as expected.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Issues are public. Everything you attach here can be seen by anyone.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a 30-second recording of …
+        2. Choose …
+        3. See …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Stillset version
+      description: Shown in Stillset → About Stillset.
+      placeholder: 0.1.0 (1)
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and Mac
+      placeholder: macOS 27.0.1, MacBook Pro M4
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostic
+    attributes:
+      label: Diagnostic report
+      description: |
+        Choose Help → Export Diagnostic…, review the file, then drag it here. It contains versions, processing stages, and error codes only. See docs/diagnostics.md.
+  - type: textarea
+    id: recording
+    attributes:
+      label: Recording (optional)
+      description: |
+        Attach a recording only if the problem depends on the video and the diagnostic is not enough. Check that it shows nothing you don't want to make public, or record sample content instead. Never attach the analysis cache.

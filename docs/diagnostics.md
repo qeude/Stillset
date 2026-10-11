@@ -6,7 +6,9 @@ Choose **Help → Export Diagnostic…** to save a local JSON report. In French,
 
 The report contains app and macOS versions, operation identifiers, timestamps, and technical events such as analysis completion, cancellation, or a fixed error category. Operation identifiers are random and do not identify a recording or a device.
 
-Diagnostics exclude videos, screenshots, recognized text, screen names, source paths, filenames, video hashes, account information, and raw system logs. The analysis cache is separate and is never attached to the report. Do not attach a recording or the analysis cache to a public issue.
+Diagnostics exclude videos, screenshots, recognized text, screen names, source paths, filenames, video hashes, account information, and raw system logs. The analysis cache is separate and is never attached to the report. Never attach the cache to an issue.
+
+Attach a recording to a public issue only if the problem depends on that video and the diagnostic is not enough. Stillset never shares a recording for you; attaching one is your decision. Check that it shows nothing you don't want to make public, or reproduce the problem with sample content.
 
 Stillset keeps at most 256 diagnostic events within 256 KiB. Events older than seven days are removed when the journal is next read, updated, or exported. No cleanup runs while the app is closed. The journal records operation boundaries rather than every frame or interaction. A start without a completion event does not prove that the app crashed. A sudden termination can prevent the most recent event from being saved.
 
