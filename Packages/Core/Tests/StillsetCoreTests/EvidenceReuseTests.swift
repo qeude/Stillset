@@ -116,7 +116,7 @@ struct EvidenceReuseTests {
         #expect(calls.withLock { $0 } == 1)
     }
 
-    @Test func realVisionUsesTheShared800PixelImageAcrossModes() async throws {
+    @Test(.disabled(if: isVirtualMachine, "Requires a physical Mac")) func realVisionUsesTheShared800PixelImageAcrossModes() async throws {
         let video = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Fixtures/scroll-stops-navigation-return.mov")
         let result = try await AnalysisPipeline.run(url: video, onProgress: { _ in })

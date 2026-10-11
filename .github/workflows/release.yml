@@ -45,8 +45,8 @@ jobs:
             [[ "$GITHUB_REF" == refs/heads/main ]] || exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - run: swift test --package-path Packages/Core
-      - run: swift test --package-path Packages/Features
+      - run: swift test --package-path Packages/Core --no-parallel
+      - run: swift test --package-path Packages/Features --no-parallel
 
   release:
     needs: validate

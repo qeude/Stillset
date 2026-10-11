@@ -373,7 +373,7 @@ struct SessionModelTests {
         #expect(session.screenshots.map(\.fileURL) == [first, second])
     }
 
-    @Test func realLocalCatalogMatchesNonidenticalPNGsWithoutFoundationModels() async throws {
+    @Test(.disabled(if: isVirtualMachine, "Requires a physical Mac")) func realLocalCatalogMatchesNonidenticalPNGsWithoutFoundationModels() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }

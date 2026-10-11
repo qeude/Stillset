@@ -5,7 +5,7 @@ import StillsetCore
 import Testing
 
 struct ProcessingEquivalenceTests {
-    @Test func recordedWorkflowPreservesEveryProxyStateAndOriginalPNGPixel() async throws {
+    @Test(.disabled(if: isVirtualMachine, "Requires a physical Mac")) func recordedWorkflowPreservesEveryProxyStateAndOriginalPNGPixel() async throws {
         let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Fixtures")
         let expected = try JSONDecoder().decode(WorkflowEvidence.self,

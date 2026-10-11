@@ -587,7 +587,7 @@ struct ScreenCatalogTests {
         }
     }
 
-    @Test func preparedRealVisionMatchesUnpreparedCatalog() async throws {
+    @Test(.disabled(if: isVirtualMachine, "Requires a physical Mac")) func preparedRealVisionMatchesUnpreparedCatalog() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
