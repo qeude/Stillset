@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Issues are public. Do not attach screen recordings, screenshots of personal content, or the analysis cache.
+        Issues are public. Everything you attach here can be seen by anyone.
   - type: textarea
     id: what-happened
     attributes:
@@ -44,3 +44,9 @@ body:
       label: Diagnostic report
       description: |
         Choose Help → Export Diagnostic…, review the file, then drag it here. It contains versions, processing stages, and error codes only. See docs/diagnostics.md.
+  - type: textarea
+    id: recording
+    attributes:
+      label: Recording (optional)
+      description: |
+        Attach a recording only if the problem depends on the video and the diagnostic is not enough. Check that it shows nothing you don't want to make public, or record sample content instead. Never attach the analysis cache.
