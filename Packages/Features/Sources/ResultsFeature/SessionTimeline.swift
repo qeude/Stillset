@@ -110,11 +110,18 @@ struct SessionTimeline: View {
     @ViewBuilder
     private func timelineCard(_ card: TimelineRenderPlan.Card) -> some View {
         switch card.content {
+        case .emptyJob(let job) where job.importState.isPending:
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(.quaternary)
+                .overlay { ProgressView().controlSize(.small) }
+                .frame(width: TimelineRenderPlan.imageWidth(for: 9 / 19), height: 112)
+                .frame(width: 190, height: 136, alignment: .topLeading)
+                .accessibilityElement()
+                .accessibilityLabel(job.importState.label)
         case .emptyJob(let job):
             VStack(alignment: .leading, spacing: 6) {
                 Text(job.importState.label)
                 if let failure = job.importState.failure { Text(failure).lineLimit(3).help(failure) }
-                if job.importState.isPending { Text(job.progress.detail) }
                 Text("No screenshots available", bundle: .module)
             }
             .font(.caption)
