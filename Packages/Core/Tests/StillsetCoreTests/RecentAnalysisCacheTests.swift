@@ -30,6 +30,24 @@ struct RecentAnalysisCacheTests {
         #expect(!json.contains("fileURL") && !json.contains("sourceURL"))
     }
 
+    @Test func removeAllForgetsStoredAndInFlightAnalyses() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = RecentAnalysisCache(directory: root.appendingPathComponent("cache"))
+        try await cache.removeAll()
+        let video = root.appendingPathComponent("video.mov")
+        try Data([1, 2, 3]).write(to: video)
+        let source = try #require(try await cache.fingerprint(for: video))
+        try await cache.store(snapshot(video), for: source)
+        try await cache.removeAll()
+        #expect(try await cache.load(for: source) == nil)
+        try await cache.store(snapshot(video), for: source)
+        #expect(try await cache.load(for: source) == nil)
+        let fresh = try #require(try await cache.fingerprint(for: video))
+        try await cache.store(snapshot(video), for: fresh)
+        #expect(try await cache.load(for: fresh) != nil)
+    }
+
     @Test func renameCopyAndSameLengthContentChanges() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }

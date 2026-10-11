@@ -97,6 +97,23 @@
           }
         }
       }
+    },
+    "Clear Analysis Cache": {
+      "comment": "Forgets saved analyses so the next import of the same recording is analyzed from scratch.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear Analysis Cache"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vider le cache d’analyse"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

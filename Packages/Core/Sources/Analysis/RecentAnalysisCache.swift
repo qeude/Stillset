@@ -45,6 +45,7 @@ public actor RecentAnalysisCache {
         fileprivate let sha256: String
         fileprivate let byteCount: Int64
         fileprivate let stamp: Stamp
+        fileprivate let generation: Int
     }
 
     struct Limits: Sendable {
@@ -57,6 +58,8 @@ public actor RecentAnalysisCache {
     private let directory: URL
     private let limits: Limits
     private let now: @Sendable () -> Date
+    /// Sources fingerprinted before the last `removeAll()` belong to analyses the user asked to forget.
+    private var generation = 0
 
     public init(directory: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("com.qeude.stillset/RecentAnalysis", isDirectory: true)) {
@@ -96,7 +99,7 @@ public actor RecentAnalysisCache {
         try Task.checkCancellation()
         guard count > 0, count == before.size, before == (try stamp(url)) else { throw SourceError.changed }
         return Source(url: url, sha256: digest.finalize().map { String(format: "%02x", $0) }.joined(),
-                      byteCount: count, stamp: before)
+                      byteCount: count, stamp: before, generation: generation)
     }
 
     /// An unavailable source disables persistence without discarding usable captures.
@@ -116,9 +119,16 @@ public actor RecentAnalysisCache {
         return envelope.analysis
     }
 
+    /// Forgets every saved analysis, so the next import of a recording is analyzed from scratch.
+    public func removeAll() throws {
+        generation += 1
+        guard safeDirectory(create: false) else { return }
+        try FileManager.default.removeItem(at: directory)
+    }
+
     public func store(_ analysis: CachedAnalysis, for source: Source) throws {
         try Task.checkCancellation()
-        guard safeDirectory(create: true) else { return }
+        guard source.generation == generation, safeDirectory(create: true) else { return }
         let envelope = Envelope(analysis, source: source, date: now())
         guard valid(envelope), let data = try? JSONEncoder().encode(envelope), data.count <= limits.entryBytes,
               data.count <= limits.totalBytes, limits.entries > 0 else { return }
@@ -137,7 +147,7 @@ public actor RecentAnalysisCache {
     /// Call after successful reconstruction and a final `matches` check.
     public func markUsed(_ source: Source) throws {
         try Task.checkCancellation()
-        guard safeDirectory(create: false), var envelope = read(file(for: source)),
+        guard source.generation == generation, safeDirectory(create: false), var envelope = read(file(for: source)),
               envelope.sha256 == source.sha256, envelope.byteCount == source.byteCount else { return }
         envelope.lastUsedAt = now().timeIntervalSince1970
         guard let data = try? JSONEncoder().encode(envelope), data.count <= limits.entryBytes else { return }

@@ -32,6 +32,7 @@ struct StillsetApp: App {
             CommandGroup(after: .help) {
                 Button("Export Diagnostic…", action: diagnosticPresenter.export)
                     .disabled(diagnosticPresenter.isExporting)
+                Button("Clear Analysis Cache") { Task { try? await RecentAnalysisCache.shared.removeAll() } }
             }
             CommandGroup(replacing: .newItem) {
                 Button("Open Recordings…", action: openVideos)
