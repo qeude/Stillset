@@ -116,6 +116,12 @@ public actor RecentAnalysisCache {
         return envelope.analysis
     }
 
+    /// Forgets every saved analysis, so the next import of a recording is analyzed from scratch.
+    public func removeAll() throws {
+        guard safeDirectory(create: false) else { return }
+        try FileManager.default.removeItem(at: directory)
+    }
+
     public func store(_ analysis: CachedAnalysis, for source: Source) throws {
         try Task.checkCancellation()
         guard safeDirectory(create: true) else { return }
