@@ -63,7 +63,7 @@ enum ScreenSemanticNamer {
     static func classify(
         fileURLs: [URL], sources: [Int], work: ProcessingLane = .standalone(), cachedNames: [Int: ScreenNameResult] = [:],
         recognition: [Int: ScreenVisionFallback.Recognition] = [:],
-        useFoundationModels: Bool = true,
+        useFoundationModels: Bool = true, diagnostics: DiagnosticOperationHandle? = nil,
         onProgress: @Sendable (Double, String) async throws -> Void
     ) async throws -> [ScreenNameResult] {
         try Task.checkCancellation()
@@ -80,6 +80,7 @@ enum ScreenSemanticNamer {
                     error: title == nil ? String(localized: "Title unavailable with Vision.", bundle: .module) : nil, usedVision: title != nil)
             }
         }
+        await diagnostics?.stage(.semanticNaming)
         let pending = representatives.filter { results[$0] == nil }
         let preparedNames = results
         let chronologicalContexts = try await work.perform {
@@ -94,7 +95,7 @@ enum ScreenSemanticNamer {
         let named = try await ScreenCatalogAnalyzer.orderedMap(Array(pending.enumerated()), work: work, operation: { item in
             let (_, index) = item
             let session = makeSession()
-            let result = try await nameWithFallback(fileURLs[index], recognizedTitle: recognition[index].map { .known($0.title) } ?? .missing) {
+            let result = try await nameWithFallback(fileURLs[index], recognizedTitle: recognition[index].map { .known($0.title) } ?? .missing, diagnostics: diagnostics) {
                 guard isAvailable else { throw CocoaError(.featureUnsupported) }
                 let image = try ScreenCatalogAnalyzer.proxyImage(fileURLs[index])
                 let response = try await session.respond(to: Prompt {
@@ -161,13 +162,16 @@ enum ScreenSemanticNamer {
     static func nameWithFallback(
         _ url: URL, recognizedTitle: RecognizedTitle = .missing,
         recognizeTitle: @Sendable (URL) async throws -> String? = ScreenVisionFallback.name,
+        diagnostics: DiagnosticOperationHandle? = nil,
         operation: @Sendable () async throws -> String
     ) async throws -> ScreenNameResult {
         do { return ScreenNameResult(name: try await retryOnce(operation), error: nil) }
         catch is CancellationError { throw CancellationError() }
         catch {
             try Task.checkCancellation()
-            Logger(subsystem: "com.stillflow.app", category: "ImageAnalysis").error("Image naming failed: \(String(describing: error), privacy: .public)")
+            Logger(subsystem: "com.qeude.stillset", category: "ImageAnalysis").error("Image naming failed")
+            await diagnostics?.issue(.classify(error), at: .semanticNaming)
+            await diagnostics?.stage(.visionFallback)
             do {
                 let title: String?
                 switch recognizedTitle {
@@ -179,7 +183,8 @@ enum ScreenSemanticNamer {
                 }
             } catch is CancellationError { throw CancellationError() }
             catch {
-                Logger(subsystem: "com.stillflow.app", category: "ImageAnalysis").error("Vision fallback failed: \(String(describing: error), privacy: .public)")
+                Logger(subsystem: "com.qeude.stillset", category: "ImageAnalysis").error("Vision fallback failed")
+                await diagnostics?.issue(.classify(error), at: .visionFallback)
             }
             return ScreenNameResult(name: String(localized: "Screenshot to Review", bundle: .module), error: String(localized: "Naming unavailable with Apple Intelligence and Vision.", bundle: .module))
         }

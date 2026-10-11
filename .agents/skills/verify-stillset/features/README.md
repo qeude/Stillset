@@ -15,7 +15,7 @@ Entry-point labels in these maps are shown in French. Stillset also supports Eng
 
 ## Evidence rules
 
-Launch the native `com.stillflow.app` through the native Xcode MCP. Use `cua_repl` for every UI action and observation. Resolve the running app from its launch/run metadata, read `app.getAXState()`, and use only indexes freshly observed in that accessibility tree. Re-read the tree after state changes before clicking; native menu items may need Return after they open. Do not use browser locators or stale indexes.
+Launch the native `com.qeude.stillset` through the native Xcode MCP. Use `cua_repl` for every UI action and observation. Resolve the running app from its launch/run metadata, read `app.getAXState()`, and use only indexes freshly observed in that accessibility tree. Re-read the tree after state changes before clicking; native menu items may need Return after they open. Do not use browser locators or stale indexes.
 
 For file selection, invoke the app's open command, press ⌘⇧G in the file panel, type the absolute video path, press Return, then inspect the new tree and click its current **Open** button index. Do not assume an old index remains valid.
 

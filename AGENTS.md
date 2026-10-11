@@ -19,7 +19,7 @@
 - Read the files relevant to the requested change. Use `README.md` for the current user workflow and analysis behavior; consult package manifests when changing package dependencies or targets.
 - Keep analysis deterministic and preserve existing occurrences unless the requested behavior clearly changes that policy.
 - For analysis or export changes, run `swift test --package-path Packages/Core`; the suite uses local recordings and temporary output. Fix regressions caused by the change before reporting completion.
-- For Xcode builds, launches, and project inspection, use the Xcode MCP when available. Use `BuildProject` for compile-only work and call `StopProject` before each `RunProject`. Xcode and the shell fallback share `dist/Stillset.app`; keep `PRODUCT_BUNDLE_IDENTIFIER` as `com.stillflow.app`. Use the CLI only when the MCP is unavailable or cannot perform the requested operation.
+- For Xcode builds, launches, and project inspection, use the Xcode MCP when available. Use `BuildProject` for compile-only work and call `StopProject` before each `RunProject`. Xcode and the shell fallback share `dist/Stillset.app`; keep `PRODUCT_BUNDLE_IDENTIFIER` as `com.qeude.stillset`. Use the CLI only when the MCP is unavailable or cannot perform the requested operation.
 - Local builds use ad-hoc signing. Select a development team only when signing or distribution is part of the requested change.
 - CLI compile-only fallback: `xcodebuild -project Stillset.xcodeproj -scheme Stillset -configuration Debug -derivedDataPath .build/Xcode CODE_SIGNING_ALLOWED=NO build`.
 - Shell launch fallback: `./script/build_and_run.sh` builds and launches the app.

@@ -117,6 +117,7 @@ typealias SessionCatalogRunner = @Sendable ([URL], Bool, @escaping @Sendable (Do
 public final class SessionModel {
     public let imports: VideoImportQueue
     let thumbnailLoader: ThumbnailLoader
+    private let diagnostics: DiagnosticJournal?
     private let preferences: AppPreferences
     private(set) var showsUniqueScreens: Bool
     private(set) var groupsTimelineByScreen: Bool
@@ -143,7 +144,8 @@ public final class SessionModel {
     private var fanSlots: [OccurrenceID: Int] = [:]
     private var retainedVisibleIDs: Set<OccurrenceID> = []
     private var knownReadyIDs: Set<OccurrenceID> = []
-    private let catalogRunner: SessionCatalogRunner
+    private let catalogAnalyzer = ScreenCatalogAnalyzer()
+    private let catalogRunner: SessionCatalogRunner?
     private var catalogTask: Task<Void, Never>?
     private var catalogToken: UUID?
     private var pendingCatalog: (snapshot: SessionCatalogSnapshot, refined: Bool)?
@@ -152,6 +154,7 @@ public final class SessionModel {
     private var automaticMetadata: [OccurrenceID: CatalogMetadata] = [:]
     private var refinedMetadata: [OccurrenceID: CatalogMetadata] = [:]
     private var startupTask: Task<Void, Never>?
+    var chooseSaveFolder: (@MainActor (ScreenshotExportPlan) -> URL?)?
     private var exportTask: Task<Void, Never>?
     private var exportToken: UUID?
     private var exportCancellationRequested = false
@@ -170,24 +173,18 @@ public final class SessionModel {
         case local(UUID, Int)
     }
 
-    public convenience init(preferences: AppPreferences) {
-        self.init(preferences: preferences, imports: VideoImportQueue())
+    public convenience init(preferences: AppPreferences, diagnostics: DiagnosticJournal? = nil) {
+        self.init(preferences: preferences, imports: VideoImportQueue(diagnostics: diagnostics), diagnostics: diagnostics)
     }
 
-    init(preferences: AppPreferences, imports: VideoImportQueue, catalogRunner: SessionCatalogRunner? = nil) {
+    init(preferences: AppPreferences, imports: VideoImportQueue, catalogRunner: SessionCatalogRunner? = nil, diagnostics: DiagnosticJournal? = nil) {
+        self.diagnostics = diagnostics
         self.preferences = preferences
         self.imports = imports
         thumbnailLoader = ThumbnailLoader(lane: imports.processing.thumbnailLane, cadence: imports.processing.cadence)
         showsUniqueScreens = preferences.captureDefault == .uniques
         groupsTimelineByScreen = preferences.organisationDefault == .byScreen
-        let analyzer = ScreenCatalogAnalyzer()
-        let catalogLane = imports.processing.catalogLane
-        self.catalogRunner = catalogRunner ?? { urls, refined, progress in
-            let catalog = try await analyzer.analyze(fileURLs: urls, work: catalogLane, useContextualNaming: true,
-                useFoundationModels: refined, onProgress: progress)
-            return SessionCatalogResult(classifications: catalog.classifications, recognitionFailures: catalog.recognitionFailures,
-                errorDescription: catalog.errorDescription)
-        }
+        self.catalogRunner = catalogRunner
         imports.onPublication = { [weak self] in self?.processingPublished() }
         imports.onDrain = { [weak self] in self?.requestCatalog() }
         processingPublished()
@@ -196,7 +193,7 @@ public final class SessionModel {
     public func replacingVideos(_ urls: [URL]) -> SessionModel {
         let pendingStartup = startupTask
         cancelSessionWork()
-        let next = SessionModel(preferences: preferences, imports: VideoImportQueue(paused: true))
+        let next = SessionModel(preferences: preferences, imports: VideoImportQueue(paused: true, diagnostics: diagnostics), diagnostics: diagnostics)
         next.imports.enqueue(urls)
         next.startupTask = Task { [weak next] in
             await pendingStartup?.value
@@ -508,6 +505,9 @@ public final class SessionModel {
         if request.refined { refinementDetail = String(localized: "Refining screenshots…", bundle: .module) }
         else { catalogDetail = String(localized: "Organizing session…", bundle: .module) }
         let runner = catalogRunner
+        let analyzer = catalogAnalyzer
+        let work = imports.processing.catalogLane
+        let diagnostics = diagnostics
         let cadence = imports.processing.cadence
         let delivery = ProgressDelivery(cadence: cadence) { [weak self] fraction, _ in
             guard let self, self.catalogToken == token, self.activeCatalogRequest?.snapshot == request.snapshot,
@@ -519,9 +519,23 @@ public final class SessionModel {
             return true
         }
         catalogTask = Task.detached(priority: .utility) { [weak self] in
+            let diagnostic = await diagnostics?.begin(request.refined ? .refinement : .sessionCatalog)
+            await diagnostic?.stage(.cataloging)
             do {
-                let result = try await runner(request.snapshot.inputs.map(\.fileURL), request.refined) { fraction, detail in
+                let progress: @Sendable (Double, String) async throws -> Void = { fraction, detail in
                     try await delivery.update(fraction, detail)
+                }
+                let result: SessionCatalogResult
+                if let runner {
+                    result = try await runner(request.snapshot.inputs.map(\.fileURL), request.refined, progress)
+                } else {
+                    let catalog = try await analyzer.analyze(fileURLs: request.snapshot.inputs.map(\.fileURL), work: work,
+                        useContextualNaming: true, useFoundationModels: request.refined, diagnostics: diagnostic, onProgress: progress)
+                    result = SessionCatalogResult(classifications: catalog.classifications,
+                        recognitionFailures: catalog.recognitionFailures, errorDescription: catalog.errorDescription)
+                }
+                if result.recognitionFailures > 0 || result.errorDescription != nil {
+                    await diagnostic?.issue(.unknown, at: .cataloging)
                 }
                 try await delivery.flush()
                 try Task.checkCancellation()
@@ -554,8 +568,11 @@ public final class SessionModel {
                             expectedIDs: inputs.map { $0.element.id.stateID })
                     }
                 }
+                await diagnostic?.finish(Task.isCancelled ? .cancelled : .success)
             } catch is CancellationError {
+                await diagnostic?.finish(.cancelled)
             } catch {
+                await diagnostic?.finish(.failure(error, cancelled: Task.isCancelled))
                 let message = error.localizedDescription
                 _ = try? await cadence.commit {
                     guard let self, self.catalogToken == token,
@@ -782,19 +799,10 @@ public final class SessionModel {
                 isExporting = false
             }
         }
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.canCreateDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = String(localized: "Save Here", bundle: .module)
-        let layout: String
-        switch plan {
-        case .singleFolder: layout = String(localized: "Choose a folder for \(plan.fileCount) full-resolution PNGs, numbered in timeline order.", bundle: .module)
-        case .screenFolders: layout = String(localized: "Choose a folder for \(plan.fileCount) full-resolution PNGs, organized by screen and numbered in timeline order.", bundle: .module)
-        }
-        panel.message = layout
-        guard panel.runModal() == .OK, let folderURL = panel.url else { return }
+        let folderURL: URL?
+        if let chooseSaveFolder { folderURL = chooseSaveFolder(plan) }
+        else { folderURL = presentSavePanel(plan: plan) }
+        guard let folderURL else { return }
 
         let model = self
         notice = nil
@@ -807,7 +815,10 @@ public final class SessionModel {
             model.progress = AnalysisProgress(stage: .exporting, fraction: fraction, detail: detail)
             return true
         }
+        let diagnostics = diagnostics
         exportTask = Task.detached(priority: .utility) {
+            let diagnostic = await diagnostics?.begin(.sessionExport)
+            await diagnostic?.stage(.saving)
             let result: Result<[URL], Error>
             do {
                 let copied = try await ScreenshotExporter.copy(plan: plan, to: folderURL, work: work) { fraction, detail in
@@ -816,6 +827,10 @@ public final class SessionModel {
                 try await delivery.flush()
                 result = .success(copied)
             } catch { result = .failure(error) }
+            switch result {
+            case .success: await diagnostic?.finish(Task.isCancelled ? .cancelled : .success)
+            case .failure(let error): await diagnostic?.finish(.failure(error, cancelled: Task.isCancelled))
+            }
             let completion = Task.detached(priority: .utility) {
                 _ = try? await cadence.commit {
                     guard model.exportToken == token else { return false }
@@ -841,6 +856,25 @@ public final class SessionModel {
             await completion.value
         }
         transferredWork = true
+    }
+
+    func waitForExport() async { await exportTask?.value }
+
+    private func presentSavePanel(plan: ScreenshotExportPlan) -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = String(localized: "Save Here", bundle: .module)
+        let layout: String
+        switch plan {
+        case .singleFolder: layout = String(localized: "Choose a folder for \(plan.fileCount) full-resolution PNGs, numbered in timeline order.", bundle: .module)
+        case .screenFolders: layout = String(localized: "Choose a folder for \(plan.fileCount) full-resolution PNGs, organized by screen and numbered in timeline order.", bundle: .module)
+        }
+        panel.message = layout
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url
     }
 
     func cancelExport() {

@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import StillsetCore
 import UniformTypeIdentifiers
 
 enum VideoImportState: Equatable, Sendable {
@@ -49,19 +50,22 @@ public final class VideoImportQueue {
     private var isPaused = false
     private var laneSlots: [UUID: Int] = [:]
     private var nextImportOrdinal = 1
+    private let diagnostics: DiagnosticJournal?
     private let runner: AnalysisRunner?
     private var activeTasks: [UUID: Task<Void, Never>] = [:]
 
-    public init() { runner = nil }
+    public init(diagnostics: DiagnosticJournal? = nil) { runner = nil; self.diagnostics = diagnostics }
 
-    init(paused: Bool) {
+    init(paused: Bool, diagnostics: DiagnosticJournal? = nil) {
+        self.diagnostics = diagnostics
         runner = nil
         isPaused = paused
     }
 
-    init(runner: @escaping AnalysisRunner) { self.runner = runner }
+    init(runner: @escaping AnalysisRunner, diagnostics: DiagnosticJournal? = nil) { self.runner = runner; self.diagnostics = diagnostics }
 
     init(models: [AppModel]) {
+        diagnostics = nil
         runner = nil
         for model in models { append(model) }
     }
@@ -102,7 +106,7 @@ public final class VideoImportQueue {
     func enqueue(_ urls: [URL]) -> Bool {
         guard !isClosed else { return false }
         for url in urls {
-            let model = AppModel()
+            let model = AppModel(diagnostics: diagnostics)
             let supported = Self.supportsVideo(url)
             model.admit(url, failure: supported ? nil : String(localized: "Choose a local MOV or MP4 recording.", bundle: .module))
             append(model)
@@ -144,7 +148,7 @@ public final class VideoImportQueue {
               let url = model.videoURL else { return }
         if reuseCache, !canRetry(model) { return }
         let sourceID = model.retrySourceID ?? model.id
-        let retry = AppModel()
+        let retry = AppModel(diagnostics: diagnostics)
         retry.reuseCachedAnalysis = reuseCache
         retry.retrySourceID = sourceID
         retry.attempt = models.filter { ($0.retrySourceID ?? $0.id) == sourceID }.map(\.attempt).max().map { $0 + 1 } ?? 2
@@ -157,7 +161,7 @@ public final class VideoImportQueue {
 
     private func fillAvailableSlots() {
         guard !isClosed, !isPaused else { return }
-        while activeTasks.count < 2, let model = models.first(where: { $0.importState == .queued }) {
+        while activeTasks.count < 2, let model = models.first(where: { $0.importState == .queued || $0.needsImportDiagnostic }) {
             let slot = (0..<2).first { !laneSlots.values.contains($0) }!
             laneSlots[model.id] = slot
             let completion = model.startAnalysis(runner: runner, work: processing.importLanes[slot], cadence: processing.cadence)

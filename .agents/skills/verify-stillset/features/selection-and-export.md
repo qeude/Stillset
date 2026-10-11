@@ -14,7 +14,7 @@ Import a video and select a ready thumbnail in the timeline. Command-click adds 
 
 ## Driving it with `cua_repl`
 
-Launch via the native Xcode MCP; resolve `com.stillflow.app` from run metadata. Observe the native accessibility tree with `app.getAXState()` and interact only through `cua_repl`; indexes must match strings in the most recently observed tree. Refresh the tree after selection changes and verify selected state before export. Use ⌘A only after ready captures are visible. For multi-selection, use the observed capture elements and modifier-click if the CUA API supports it, then confirm the selected values in fresh AX state.
+Launch via the native Xcode MCP; resolve `com.qeude.stillset` from run metadata. Observe the native accessibility tree with `app.getAXState()` and interact only through `cua_repl`; indexes must match strings in the most recently observed tree. Refresh the tree after selection changes and verify selected state before export. Use ⌘A only after ready captures are visible. For multi-selection, use the observed capture elements and modifier-click if the CUA API supports it, then confirm the selected values in fresh AX state.
 
 Invoke export through the currently observed **Exporter…** button or ⌘S. In the destination panel, choose the folder through observed controls and confirm the current save/open action by its AX label and index. Capture the resulting filenames and folder structure as evidence. Test non-overwrite behavior by attempting an export where a destination filename already exists and verify the app's visible outcome without assuming the existing file changed. A `.png` file dropped onto the import screen is an invalid video case, not an export test.
 
