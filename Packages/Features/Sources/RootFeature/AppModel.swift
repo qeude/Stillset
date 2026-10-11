@@ -242,6 +242,8 @@ public final class AppModel: Identifiable {
             }
         }
         precondition(importState == .queued)
+        // Without an activity, App Nap throttles the analysis while Stillset is in the background.
+        let activity = ProcessInfo.processInfo.beginActivity(options: .userInitiated, reason: "Analyzing a screen recording")
         let token = UUID()
         analysisToken = token
         deliveryAcknowledged = 0
@@ -267,6 +269,7 @@ public final class AppModel: Identifiable {
             }
             analysisTask = worker
             return Task { [self] in
+                defer { ProcessInfo.processInfo.endActivity(activity) }
                 let outcome = await worker.value
                 completeQueuedAnalysis(outcome, token: token)
             }
@@ -274,6 +277,7 @@ public final class AppModel: Identifiable {
         beginAnalysis(videoURL!, reuseCache: reuseCachedAnalysis)
         let worker = analysisOperation?.task
         return Task { [self] in
+            defer { ProcessInfo.processInfo.endActivity(activity) }
             await worker?.value
             let outcome: VideoImportState
             switch analysisOutcome {
