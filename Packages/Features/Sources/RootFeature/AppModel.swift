@@ -130,6 +130,8 @@ public final class AppModel: Identifiable {
     private var processingLane = ProcessingLane.standalone()
     private var processingCadence = SessionCadence()
 
+    private let diagnostics: DiagnosticJournal?
+    private(set) var needsImportDiagnostic = false
     private let preferences: AppPreferences
     private let recentAnalysisCache: RecentAnalysisCache
     private let localCatalog: (@Sendable ([URL]) async throws -> ScreenCatalog)?
@@ -147,15 +149,16 @@ public final class AppModel: Identifiable {
     private var selectionAnchorID: UUID?
     private var fanSlots: [UUID: Int] = [:]
 
-    public convenience init() { self.init(preferences: AppPreferences(defaults: .standard)) }
+    public convenience init(diagnostics: DiagnosticJournal? = nil) { self.init(preferences: AppPreferences(defaults: .standard), diagnostics: diagnostics) }
 
-    public convenience init(preferences: AppPreferences) {
-        self.init(preferences: preferences, cache: .shared)
+    public convenience init(preferences: AppPreferences, diagnostics: DiagnosticJournal? = nil) {
+        self.init(preferences: preferences, cache: .shared, diagnostics: diagnostics)
     }
 
-    init(preferences: AppPreferences, cache: RecentAnalysisCache,
+    init(preferences: AppPreferences, cache: RecentAnalysisCache, diagnostics: DiagnosticJournal? = nil,
          localCatalog: (@Sendable ([URL]) async throws -> ScreenCatalog)? = nil,
          refineCatalog: (@Sendable ([URL]) async throws -> ScreenCatalog)? = nil) {
+        self.diagnostics = diagnostics
         self.preferences = preferences
         self.recentAnalysisCache = cache
         self.localCatalog = localCatalog
@@ -193,6 +196,7 @@ public final class AppModel: Identifiable {
         videoURL = url
         importState = failure.map(VideoImportState.failed) ?? .queued
         errorMessage = failure
+        needsImportDiagnostic = failure != nil && diagnostics != nil
     }
 
     func updateAnalysis(token: UUID, _ update: (AppModel) -> Void) {
@@ -228,6 +232,15 @@ public final class AppModel: Identifiable {
     }
 
     func startAnalysis(runner: AnalysisRunner? = nil, work: ProcessingLane = .standalone(), cadence: SessionCadence = SessionCadence()) -> Task<Void, Never> {
+        if needsImportDiagnostic {
+            needsImportDiagnostic = false
+            let diagnostics = diagnostics
+            return Task {
+                let diagnostic = await diagnostics?.begin(.videoImport)
+                await diagnostic?.stage(.validating)
+                await diagnostic?.finish(.failed(.unsupportedImport))
+            }
+        }
         precondition(importState == .queued)
         let token = UUID()
         analysisToken = token
@@ -237,7 +250,21 @@ public final class AppModel: Identifiable {
         importState = .running
         if let runner {
             analysisOperation = AnalysisOperation()
-            let worker = Task.detached(priority: .utility) { [self] in await runner(self, token, videoURL!) }
+            let worker = Task.detached(priority: .utility) { [self] in
+                let diagnostic = await diagnostics?.begin(reuseCachedAnalysis ? .analysis : .reanalysis)
+                await diagnostic?.stage(.decoding)
+                let outcome = await runner(self, token, videoURL!)
+                if Task.isCancelled {
+                    await diagnostic?.finish(.cancelled)
+                } else {
+                    switch outcome {
+                    case .completed: await diagnostic?.finish(.success)
+                    case .cancelled, .cancelling: await diagnostic?.finish(.cancelled)
+                    default: await diagnostic?.finish(.failed(.unknown))
+                    }
+                }
+                return outcome
+            }
             analysisTask = worker
             return Task { [self] in
                 let outcome = await worker.value
@@ -448,8 +475,19 @@ public final class AppModel: Identifiable {
 
     private func beginAnalysis(_ url: URL, reuseCache: Bool) {
         guard !isWorking else { return }
-        guard ["mov", "mp4"].contains(url.pathExtension.lowercased()) else {
+        guard url.isFileURL, ["mov", "mp4"].contains(url.pathExtension.lowercased()) else {
             errorMessage = String(localized: "Choose a MOV or MP4 recording.", bundle: .module)
+            if let diagnostics {
+                let operation = AnalysisOperation()
+                analysisOperation = operation
+                analysisOperation?.task = Task { [weak self] in
+                    let diagnostic = await diagnostics.begin(.videoImport)
+                    await diagnostic.stage(.validating)
+                    await diagnostic.finish(.failed(.unsupportedImport))
+                    guard let self, self.analysisOperation?.id == operation.id else { return }
+                    self.analysisOperation = nil
+                }
+            }
             return
         }
         cancelRefinement()
@@ -507,7 +545,10 @@ public final class AppModel: Identifiable {
         let beforeOrganization = beforeOrganization
         progress = AnalysisProgress(stage: .decoding, fraction: 0, detail: String(localized: "Reading video", bundle: .module))
         let model = self
+        let diagnostics = diagnostics
         analysisOperation?.task = Task.detached(priority: .userInitiated) {
+            let diagnostic = await diagnostics?.begin(reuseCache ? .analysis : .reanalysis)
+            await diagnostic?.stage(.validating)
             await oldRefinement?.value
             if let oldStaging { try? FileManager.default.removeItem(at: oldStaging) }
             await MainActor.run { model.refinementOperation = nil }
@@ -516,6 +557,7 @@ public final class AppModel: Identifiable {
                 var collector: IncrementalCaptures?
                 var attempt = firstAttempt
                 do {
+                    await diagnostic?.stage(.decoding)
                     var source = try await cache.fingerprint(for: videoURL)
                     var cached: CachedAnalysis?
                     if reuseCache, let source { cached = try await cache.load(for: source) }
@@ -532,6 +574,7 @@ public final class AppModel: Identifiable {
                         }
                         guard registered else {
                             try? FileManager.default.removeItem(at: folder)
+                            await diagnostic?.finish(.cancelled)
                             return
                         }
                         let delivery = RunDelivery(cadence: cadence) { batch in
@@ -575,12 +618,15 @@ public final class AppModel: Identifiable {
                                     onProgress: { try await delivery.progress($0) },
                                     onAnalyzedFrames: { try await delivery.previews($0) },
                                     onDetectedScreens: { screens in
+                                        await diagnostic?.stage(.detecting)
+                                        await diagnostic?.stage(.capturing)
                                         try await delivery.detections(screens)
                                         try await captures.append(screens)
                                     }
                                 )
                             }
                             try Task.checkCancellation()
+                            await diagnostic?.stage(.capturing)
                             let completed = try await captures.finish()
                             guard completed.map(\.id) == result.states.map(\.id) else {
                                 throw ScreenshotExportError.invalidImageSequence
@@ -588,6 +634,7 @@ public final class AppModel: Identifiable {
                             let files = completed.map(\.fileURL)
                             try await delivery.flush(.stage(AnalysisProgress(stage: .annotating, fraction: 0, detail: String(localized: "Organizing screenshots…", bundle: .module))))
                             try Task.checkCancellation()
+                            await diagnostic?.stage(.cataloging)
                             let catalog: ScreenCatalog
                             if let cached {
                                 catalog = cached.catalog
@@ -600,10 +647,13 @@ public final class AppModel: Identifiable {
                                 if let localCatalog {
                                     catalog = try await localCatalog(files)
                                 } else {
-                                    catalog = try await catalogAnalyzer.analyze(fileURLs: files, work: work, useFoundationModels: false, preparedRecognition: preparedRecognition) { fraction, _ in
+                                    catalog = try await catalogAnalyzer.analyze(fileURLs: files, work: work, useFoundationModels: false, preparedRecognition: preparedRecognition, diagnostics: diagnostic) { fraction, _ in
                                         try await delivery.progress(AnalysisProgress(stage: .annotating, fraction: fraction, detail: String(localized: "Organizing screenshots…", bundle: .module)))
                                     }
                                 }
+                            }
+                            if catalog.recognitionFailures > 0 || catalog.errorDescription != nil {
+                                await diagnostic?.issue(.unknown, at: .cataloging)
                             }
                             if cached == nil { await preparedRecognition.cancelAndDrain() }
                             let namedFiles = try await ScreenshotExporter.prepareNamedFiles(files: files, screenNames: catalog.classifications.map(\.name), work: work)
@@ -629,7 +679,10 @@ public final class AppModel: Identifiable {
                                 model.progress = AnalysisProgress(stage: .complete, fraction: 1, detail: String(localized: "\(files.count) screenshots ready", bundle: .module))
                                 return true
                             }
-                            guard accepted else { return }
+                            guard accepted else {
+                                await diagnostic?.finish(Task.isCancelled ? .cancelled : .success)
+                                return
+                            }
                             if let completedSource {
                                 if wasCached {
                                     try await cache.markUsed(completedSource)
@@ -638,6 +691,7 @@ public final class AppModel: Identifiable {
                                 }
                             }
                             try Task.checkCancellation()
+                            await diagnostic?.finish(.success)
                             await MainActor.run {
                                 guard model.acceptsAnalysis(session: session, attempt: currentAttempt) else { return }
                                 model.analysisAttemptID = nil
@@ -664,7 +718,11 @@ public final class AppModel: Identifiable {
                                 model.progress = AnalysisProgress(stage: .decoding, fraction: 0, detail: String(localized: "Reading video", bundle: .module))
                                 return true
                             }
-                            guard retry else { return }
+                            guard retry else {
+                                await diagnostic?.finish(.cancelled)
+                                return
+                            }
+                            await diagnostic?.issue(error is ReconstructionError ? .sourceChanged : .classify(error), at: .validating)
                             attempt = nextAttempt
                             cached = nil
                             source = try await cache.fingerprint(for: videoURL)
@@ -674,6 +732,7 @@ public final class AppModel: Identifiable {
                     await collector?.cancelAndDrain()
                     await preparedRecognition.cancelAndDrain()
                     let cancelled = Task.isCancelled || error is CancellationError
+                    await diagnostic?.finish(cancelled ? .cancelled : .failed(error is ReconstructionError ? .sourceChanged : .classify(error)))
                     let failedAttempt = attempt
                     let message = error is ReconstructionError
                         ? String(localized: "The video changed during analysis. Run the analysis again.", bundle: .module)
@@ -750,26 +809,35 @@ public final class AppModel: Identifiable {
         let analyzer = screenCatalogAnalyzer
         let cache = recentAnalysisCache
         let refinement = refineCatalog
+        let diagnostics = diagnostics
         refinementOperation?.task = Task { [weak self] in
+            let diagnostic = await diagnostics?.begin(.refinement)
+            await diagnostic?.stage(.cataloging)
             do {
                 try await beforeOrganization()
                 let catalog: ScreenCatalog
                 if let refinement {
                     catalog = try await refinement(files)
                 } else {
-                    catalog = try await analyzer.analyze(fileURLs: files) { fraction, _ in
+                    catalog = try await analyzer.analyze(fileURLs: files, diagnostics: diagnostic) { fraction, _ in
                         await MainActor.run {
                             guard let self, self.acceptsRefinement(session: session, request: request, ids: ids) else { return }
                             self.refinementOperation?.detail = String(localized: "Refining screenshots… \(fraction.formatted(.percent.precision(.fractionLength(0))))", bundle: .module)
                         }
                     }
                 }
+                if catalog.recognitionFailures > 0 || catalog.errorDescription != nil {
+                    await diagnostic?.issue(.unknown, at: .cataloging)
+                }
                 try Task.checkCancellation()
                 if let context, try await cache.matches(context.source) == false {
                     throw ReconstructionError.sourceChanged
                 }
                 try Task.checkCancellation()
-                guard let self, self.acceptsRefinement(session: session, request: request, ids: ids) else { return }
+                guard let self, self.acceptsRefinement(session: session, request: request, ids: ids) else {
+                    await diagnostic?.finish(Task.isCancelled ? .cancelled : .success)
+                    return
+                }
                 let namedFiles = try await ScreenshotExporter.prepareNamedFiles(files: files, screenNames: catalog.classifications.map(\.name))
                 self.applyRefinement(classifications: catalog.classifications, files: namedFiles, expectedIDs: ids)
                 if catalog.recognitionFailures > 0 {
@@ -781,10 +849,12 @@ public final class AppModel: Identifiable {
                    let snapshot = CachedAnalysis(result: context.result, catalog: catalog) {
                     try await cache.store(snapshot, for: context.source)
                 }
+                await diagnostic?.finish(Task.isCancelled ? .cancelled : .success)
                 guard self.acceptsRefinement(session: session, request: request, ids: ids) else { return }
                 self.refinementOutcome = .completed
                 self.refinementOperation = nil
             } catch {
+                await diagnostic?.finish(Task.isCancelled || error is CancellationError ? .cancelled : .failed(error is ReconstructionError ? .sourceChanged : .classify(error)))
                 guard let self, self.acceptsRefinement(session: session, request: request, ids: ids) else { return }
                 if !(error is CancellationError) && !Task.isCancelled {
                     self.notice = String(localized: "Refinement interrupted: \(error.localizedDescription). Local results remain available.", bundle: .module)
@@ -957,7 +1027,10 @@ public final class AppModel: Identifiable {
         let copy = copyFiles
         notice = nil
         errorMessage = nil
+        let diagnostics = diagnostics
         saveOperation?.task = Task.detached(priority: .userInitiated) {
+            let diagnostic = await diagnostics?.begin(.screenshotExport)
+            await diagnostic?.stage(.saving)
             do {
                 let copied = try await copy(operation.plan, folderURL) { fraction, detail in
                     Task { @MainActor in
@@ -966,6 +1039,7 @@ public final class AppModel: Identifiable {
                     }
                 }
                 try Task.checkCancellation()
+                await diagnostic?.finish(.success)
                 await MainActor.run {
                     guard model.saveOperation?.id == token else { return }
                     model.saveOutcome = .completed
@@ -974,6 +1048,7 @@ public final class AppModel: Identifiable {
                     model.notice = String(localized: "\(copied.count) screenshots saved.", bundle: .module)
                 }
             } catch is CancellationError {
+                await diagnostic?.finish(.cancelled)
                 await MainActor.run {
                     guard model.saveOperation?.id == token else { return }
                     model.saveOutcome = .cancelled
@@ -981,6 +1056,7 @@ public final class AppModel: Identifiable {
                     model.notice = String(localized: "Save cancelled", bundle: .module)
                 }
             } catch {
+                await diagnostic?.finish(.failure(error, cancelled: Task.isCancelled))
                 let message = error.localizedDescription
                 await MainActor.run {
                     guard model.saveOperation?.id == token else { return }

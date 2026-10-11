@@ -41,3 +41,7 @@ Successful OCR and comparison samples are reused across local analysis and AI re
 ## Session lifetime
 
 All imported videos and their staged PNGs are retained for the current app session. Sessions are not restored after relaunch.
+
+## Reporting a problem
+
+Choose **Help → Export Diagnostic…** to save technical diagnostics locally. The report excludes recordings, screenshots, recognized text, and personal file paths. Nothing is sent automatically. See [reporting a problem](diagnostics.md) for the contents, retention, and separate crash-report instructions.

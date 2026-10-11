@@ -3,7 +3,7 @@ set -euo pipefail
 
 MODE="${1:-run}"
 APP_NAME="Stillset"
-BUNDLE_ID="com.stillflow.app"
+BUNDLE_ID="com.qeude.stillset"
 BUILD_CONFIGURATION="Release"
 
 if [[ "$MODE" == "--debug" || "$MODE" == "debug" ]]; then

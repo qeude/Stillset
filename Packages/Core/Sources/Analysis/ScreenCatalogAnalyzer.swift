@@ -85,6 +85,7 @@ public actor ScreenCatalogAnalyzer {
     struct Evidence: Sendable {
         let comparisonPixels: [UInt8]
         let recognition: ScreenVisionFallback.Recognition?
+        var recognitionFailure: DiagnosticFailure? = nil
     }
 
     typealias Thumbnail = @Sendable (Data) throws -> CGImage
@@ -99,7 +100,7 @@ public actor ScreenCatalogAnalyzer {
             try Task.checkCancellation()
             return Evidence(comparisonPixels: pixels, recognition: recognition)
         } catch is CancellationError { throw CancellationError() }
-        catch { return Evidence(comparisonPixels: pixels, recognition: nil) }
+        catch { return Evidence(comparisonPixels: pixels, recognition: nil, recognitionFailure: .classify(error)) }
     }
 
     /// One import's first PNG recognition. Cancellation is terminal, including before start.
@@ -218,14 +219,14 @@ public actor ScreenCatalogAnalyzer {
 
     public func analyze(
         fileURLs: [URL], work: ProcessingLane = .standalone(), useContextualNaming: Bool = true, useFoundationModels: Bool = true,
-        preparedRecognition: PreparedRecognition? = nil,
+        preparedRecognition: PreparedRecognition? = nil, diagnostics: DiagnosticOperationHandle? = nil,
         onProgress: @Sendable (Double, String) async throws -> Void = { _, _ in }
     ) async throws -> ScreenCatalog {
         try await withTaskCancellationHandler {
             do {
                 let result = try await catalog(fileURLs: fileURLs, work: work, useContextualNaming: useContextualNaming,
                                                useFoundationModels: useFoundationModels,
-                                               preparedRecognition: preparedRecognition, onProgress: onProgress)
+                                               preparedRecognition: preparedRecognition, diagnostics: diagnostics, onProgress: onProgress)
                 await preparedRecognition?.cancelAndDrain()
                 try Task.checkCancellation()
                 return result
@@ -238,9 +239,10 @@ public actor ScreenCatalogAnalyzer {
 
     private func catalog(
         fileURLs: [URL], work: ProcessingLane, useContextualNaming: Bool, useFoundationModels: Bool,
-        preparedRecognition: PreparedRecognition?, onProgress: @Sendable (Double, String) async throws -> Void
+        preparedRecognition: PreparedRecognition?, diagnostics: DiagnosticOperationHandle?, onProgress: @Sendable (Double, String) async throws -> Void
     ) async throws -> ScreenCatalog {
         try Task.checkCancellation()
+        await diagnostics?.stage(.cataloging)
         var fileDigests: [SHA256.Digest?] = []
         var firstDigest: SHA256.Digest?
         var digests: [SHA256.Digest] = []
@@ -288,6 +290,7 @@ public actor ScreenCatalogAnalyzer {
             let thumbnail = thumbnail
             // Prepared OCR owns its lane already; finish other evidence before waiting for it.
             let readingOrder = preparedTask == nil ? pendingOCR : pendingOCR.filter { $0 != 0 } + pendingOCR.filter { $0 == 0 }
+            await diagnostics?.stage(.recognition)
             let readings = try await Self.orderedMap(readingOrder, work: work, operation: { index -> (Int, Evidence?) in
                 do {
                     if let digest = fileDigests[index], let evidence = cachedEvidence[digest] { return (index, evidence) }
@@ -313,15 +316,20 @@ public actor ScreenCatalogAnalyzer {
                     return (index, evidence)
                 }
                 catch is CancellationError { throw CancellationError() }
-                catch { return (index, nil) }
+                catch {
+                    await diagnostics?.issue(.classify(error), at: .recognition)
+                    return (index, nil)
+                }
             }) { count in
                 try await onProgress(Double(count) / Double(pendingOCR.count) * 0.1, String(localized: "Reading screens with Vision", bundle: .module))
             }
             var samples = [[UInt8]?](repeating: nil, count: fileURLs.count)
             for (index, evidence) in readings {
+                if let failure = evidence?.recognitionFailure { await diagnostics?.issue(failure, at: .recognition) }
                 samples[index] = evidence?.comparisonPixels
                 recognition[index] = evidence?.recognition
             }
+            await diagnostics?.stage(.comparison)
             var representatives: [Int] = []
             for index in fileURLs.indices {
                 try Task.checkCancellation()
@@ -371,7 +379,8 @@ public actor ScreenCatalogAnalyzer {
                         }
                     } catch is CancellationError { throw CancellationError() }
                     catch {
-                        Logger(subsystem: "com.stillflow.app", category: "ImageAnalysis").error("Image comparison failed: \(String(describing: error), privacy: .public)")
+                        Logger(subsystem: "com.qeude.stillset", category: "ImageAnalysis").error("Image comparison failed")
+                        await diagnostics?.issue(.classify(error), at: .comparison)
                         errorDescription = String(localized: "Apple Intelligence: \(error.localizedDescription)", bundle: .module)
                     }
                 }
@@ -382,7 +391,7 @@ public actor ScreenCatalogAnalyzer {
             savedSources = stateSources
             let names = try await ScreenSemanticNamer.classify(
                 fileURLs: fileURLs, sources: stateSources, work: work, cachedNames: matchesPrevious && stateSources == previousSources ? previousNames : [:],
-                recognition: recognition, useFoundationModels: useFoundationModels
+                recognition: recognition, useFoundationModels: useFoundationModels, diagnostics: diagnostics
             ) { fraction, detail in
                 try await onProgress(0.4 + fraction * 0.6, detail)
             }

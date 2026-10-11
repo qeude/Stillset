@@ -1,6 +1,91 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Export Diagnostic…": {
+      "comment": "Local diagnostic export. The report stays on the Mac until the user shares it.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Export Diagnostic…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exporter un diagnostic…"
+          }
+        }
+      }
+    },
+    "Save a local technical report with app and system versions, processing stages, and fixed error codes. It contains no videos, images, recognized text, filenames, paths, or personal identifiers. Nothing is sent automatically.": {
+      "comment": "Local diagnostic export. The report stays on the Mac until the user shares it.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save a local technical report with app and system versions, processing stages, and fixed error codes. It contains no videos, images, recognized text, filenames, paths, or personal identifiers. Nothing is sent automatically."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrez un rapport technique local contenant les versions de l’app et du système, les étapes de traitement et des codes d’erreur prédéfinis. Il ne contient aucune vidéo, image, aucun texte reconnu, nom de fichier, chemin d’accès ou identifiant personnel. Rien n’est envoyé automatiquement."
+          }
+        }
+      }
+    },
+    "Could not export the diagnostic.": {
+      "comment": "Local diagnostic export. The report stays on the Mac until the user shares it.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not export the diagnostic."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible d’exporter le diagnostic."
+          }
+        }
+      }
+    },
+    "Choose another location and try again.": {
+      "comment": "Local diagnostic export. The report stays on the Mac until the user shares it.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose another location and try again."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choisissez un autre emplacement et réessayez."
+          }
+        }
+      }
+    },
+    "OK": {
+      "comment": "Local diagnostic export. The report stays on the Mac until the user shares it.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK"
+          }
+        }
+      }
+    },
     "%@ · %lld videos": {
       "localizations": {
         "en": {
