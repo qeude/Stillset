@@ -34,12 +34,6 @@ public struct StillsetRootView: View {
                 ToolbarSpacer(.flexible)
                 ToolbarItem { filtersMenu }
                 ToolbarItem {
-                    Button(LocalizedStringResource("Refine with AI…", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "sparkles", action: session.refineScreens)
-                        .labelStyle(.iconOnly)
-                        .disabled(session.catalogSnapshot.inputs.isEmpty || session.refinementDetail != nil)
-                        .help(Text("Refine with AI", bundle: .module))
-                }
-                ToolbarItem {
                     Button(LocalizedStringResource("Export…", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "square.and.arrow.up", action: session.saveSelection)
                         .labelStyle(.iconOnly)
                         .disabled(!session.canSaveSelection)

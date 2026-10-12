@@ -1933,6 +1933,54 @@
           }
         }
       }
+    },
+    "Analyzing frames…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Analyzing frames…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Analyse des images…"
+          }
+        }
+      }
+    },
+    "Finding screens…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finding screens…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recherche des écrans…"
+          }
+        }
+      }
+    },
+    "Improving with AI…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Improving with AI…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Amélioration par l’IA…"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

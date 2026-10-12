@@ -290,6 +290,7 @@ public actor ScreenCatalogAnalyzer {
             let thumbnail = thumbnail
             // Prepared OCR owns its lane already; finish other evidence before waiting for it.
             let readingOrder = preparedTask == nil ? pendingOCR : pendingOCR.filter { $0 != 0 } + pendingOCR.filter { $0 == 0 }
+            if useFoundationModels { ScreenSemanticNamer.prewarm() }
             await diagnostics?.stage(.recognition)
             let readings = try await Self.orderedMap(readingOrder, work: work, operation: { index -> (Int, Evidence?) in
                 do {
@@ -330,19 +331,24 @@ public actor ScreenCatalogAnalyzer {
                 recognition[index] = evidence?.recognition
             }
             await diagnostics?.stage(.comparison)
+            let comparisonStart = ContinuousClock.now
+            executedComparisons = 0
+            executedComparisonTime = .zero
+            let digests = digests
+            let frozenSamples = samples
+            let frozenRecognition = recognition
+            var visionResolved = 0
+            var modelComparisons = 0
+            var unresolved: [String: Int] = [:]
             var representatives: [Int] = []
-            for index in fileURLs.indices {
-                try Task.checkCancellation()
-                if sources[index] != index {
-                    stateSources[index] = stateSources[sources[index]]
-                    continue
-                }
+            // Nearest earlier representatives in distance order. `visionSame` means local evidence already proved the state.
+            let candidates: @Sendable (Int, [Int]) async throws -> (ordered: [(candidate: Int, visionSame: Bool)], resolved: Int, reasons: [String]) = { index, known in
                 var distances: [(Int, Double)] = []
-                let currentPixels = samples[index]
-                let currentRecognition = recognition[index]
-                for start in stride(from: 0, to: representatives.count, by: 256) {
-                    let chunk = representatives[start..<min(start + 256, representatives.count)].map {
-                        ($0, samples[$0], recognition[$0])
+                let currentPixels = frozenSamples[index]
+                let currentRecognition = frozenRecognition[index]
+                for start in stride(from: 0, to: known.count, by: 256) {
+                    let chunk = known[start..<min(start + 256, known.count)].map {
+                        ($0, frozenSamples[$0], frozenRecognition[$0])
                     }
                     let matches = try await work.perform {
                         chunk.compactMap { previous, pixels, other -> (Int, Double)? in
@@ -357,39 +363,105 @@ public actor ScreenCatalogAnalyzer {
                 let threeNearestRepresentatives = try await work.perform {
                     Array(unsorted.sorted { $0.1 == $1.1 ? $0.0 < $1.0 : $0.1 < $1.1 }.prefix(3))
                 }
+                var ordered: [(candidate: Int, visionSame: Bool)] = []
+                var resolved = 0
+                var reasons: [String] = []
                 for (previous, _) in threeNearestRepresentatives {
-                    if let current = recognition[index], let other = recognition[previous] {
+                    if let current = frozenRecognition[index], let other = frozenRecognition[previous] {
                         let evidence = try await work.perform { current.sameState(as: other) }
                         if let same = evidence {
-                            if same { stateSources[index] = previous; break }
+                            resolved += 1
+                            if same { ordered.append((previous, true)); break }
                             continue
                         }
+                        reasons.append(current.ambiguity(with: other))
+                        // Unproven is a distinct state, except a near miss: the same page whose animated chrome defeats pixels and OCR.
+                        // Same header, same text at the same places and pixels that differ only by a few pixels of scroll.
+                        if current.hasComparableTitle(with: other), current.hasSameContentText(as: other),
+                           try await work.perform({ (try? Self.sameAfterMicroScroll(fileURLs[index], fileURLs[previous])) ?? false }) {
+                            resolved += 1
+                            ordered.append((previous, true))
+                            break
+                        }
+                        if current.isNearMiss(of: other), useFoundationModels, ScreenSemanticNamer.isAvailable {
+                            ordered.append((previous, false))
+                        }
+                        continue
                     }
-                    guard useFoundationModels && ScreenSemanticNamer.isAvailable else { continue }
+                    // Without Vision evidence the model is the only judge left.
+                    reasons.append("noRecognition")
+                    if useFoundationModels && ScreenSemanticNamer.isAvailable { ordered.append((previous, false)) }
+                }
+                return (ordered, resolved, reasons)
+            }
+            let nonDuplicates = fileURLs.indices.filter { sources[$0] == $0 }
+            for index in fileURLs.indices {
+                try Task.checkCancellation()
+                if sources[index] != index {
+                    stateSources[index] = stateSources[sources[index]]
+                    continue
+                }
+                let found = try await candidates(index, representatives)
+                visionResolved += found.resolved
+                for reason in found.reasons { unresolved[reason, default: 0] += 1 }
+                let ordered = found.ordered
+                // The model runs out of process, so it does not hold a lane or pay its cooldown.
+                let compareWithModel: @Sendable (Int) async throws -> (Int, Result<Bool, Error>) = { previous in
                     do {
-                        // The model runs out of process, so it does not hold a lane or pay its cooldown.
                         let compare: @Sendable () async throws -> Bool = {
                             try await ScreenSemanticNamer.sameContent(fileURLs[previous], fileURLs[index])
                         }
                         let same = digests.count == fileURLs.count
-                            ? try await cachedComparison(Set([digests[previous], digests[index]]), operation: compare)
+                            ? try await self.cachedComparison(Set([digests[previous], digests[index]]), operation: compare)
                             : try await compare()
-                        if same {
-                            stateSources[index] = previous
-                            break
-                        }
+                        return (previous, .success(same))
                     } catch is CancellationError { throw CancellationError() }
-                    catch {
-                        Logger(subsystem: "com.qeude.stillset", category: "ImageAnalysis").error("Image comparison failed")
-                        await diagnostics?.issue(.classify(error), at: .comparison)
-                        errorDescription = String(localized: "Apple Intelligence: \(error.localizedDescription)", bundle: .module)
+                    catch { return (previous, .failure(error)) }
+                }
+                let modelCandidates = ordered.filter { !$0.visionSame }.map(\.candidate)
+                var verdicts: [Int: Result<Bool, Error>] = [:]
+                // The nearest candidate usually decides. Only when it fails to match are the rest asked together.
+                if let nearest = modelCandidates.first {
+                    modelComparisons += 1
+                    let (_, verdict) = try await compareWithModel(nearest)
+                    verdicts[nearest] = verdict
+                    let rest = Array(modelCandidates.dropFirst())
+                    if case .success(true) = verdict {} else if !rest.isEmpty {
+                        modelComparisons += rest.count
+                        try await withThrowingTaskGroup(of: (Int, Result<Bool, Error>).self) { group in
+                            for previous in rest { group.addTask { try await compareWithModel(previous) } }
+                            for try await (previous, verdict) in group { verdicts[previous] = verdict }
+                        }
                     }
                 }
+                for case .failure(let error) in verdicts.values {
+                    Logger(subsystem: "com.qeude.stillset", category: "ImageAnalysis").error("Image comparison failed")
+                    await diagnostics?.issue(.classify(error), at: .comparison)
+                    errorDescription = String(localized: "Apple Intelligence: \(error.localizedDescription)", bundle: .module)
+                }
+                if let match = ordered.first(where: { entry in
+                    if entry.visionSame { return true }
+                    if case .success(true)? = verdicts[entry.candidate] { return true }
+                    return false
+                }) { stateSources[index] = match.candidate }
                 if stateSources[index] == index { representatives.append(index) }
                 try await onProgress(Double(index + 1) / Double(fileURLs.count) * 0.3 + 0.1,
                                  String(localized: "Grouping states: \(index + 1) of \(fileURLs.count)", bundle: .module))
             }
             savedSources = stateSources
+            // Counts only: screen content never reaches the log.
+            let confidence = Dictionary(grouping: nonDuplicates) { index -> String in
+                guard let recognition = frozenRecognition[index], recognition.title != nil else { return "none" }
+                switch recognition.titleConfidence {
+                case ..<0.5: return "lt50"
+                case ..<0.7: return "lt70"
+                case ..<0.85: return "lt85"
+                default: return "ge85"
+                }
+            }.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value.count)" }.joined(separator: ",")
+            let executed = (executedComparisons, executedComparisonTime)
+            Logger(subsystem: "com.qeude.stillset", category: "Timing").info(
+                "comparison executed=\(executed.0, privacy: .public) executedSeconds=\(executed.1.formatted(.units(allowed: [.seconds], fractionalPart: .show(length: 2))), privacy: .public) titleConfidence=\(confidence, privacy: .public) states=\(representatives.count, privacy: .public) visionResolved=\(visionResolved, privacy: .public) unresolved=\(unresolved.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }.joined(separator: ","), privacy: .public) modelComparisons=\(modelComparisons, privacy: .public) seconds=\(comparisonStart.duration(to: .now).formatted(.units(allowed: [.seconds], fractionalPart: .show(length: 2))), privacy: .public)")
             let names = try await ScreenSemanticNamer.classify(
                 fileURLs: fileURLs, sources: stateSources, work: work, cachedNames: matchesPrevious && stateSources == previousSources ? previousNames : [:],
                 recognition: recognition, useFoundationModels: useFoundationModels, diagnostics: diagnostics
@@ -437,12 +509,18 @@ public actor ScreenCatalogAnalyzer {
         if evidence.recognition != nil { completeEvidence[digest] = evidence }
     }
 
+    private var executedComparisons = 0
+    private var executedComparisonTime = Duration.zero
+
     func cachedComparison(
         _ pair: Set<SHA256.Digest>, operation: @Sendable () async throws -> Bool
     ) async throws -> Bool {
         try Task.checkCancellation()
         if let result = comparisons[pair] { return result }
+        let start = ContinuousClock.now
         let result = try await operation()
+        executedComparisons += 1
+        executedComparisonTime += start.duration(to: .now)
         try Task.checkCancellation()
         // ponytail: bounded session cache; evict the whole cache if 512 distinct pairs are exceeded.
         if comparisons.count >= 512 { comparisons.removeAll(keepingCapacity: true) }
@@ -471,6 +549,59 @@ public actor ScreenCatalogAnalyzer {
         return distance <= 8 ? distance : nil
     }
 
+    /// True when every horizontal strip of the content area matches the other image after a vertical offset of a few pixels.
+    /// A settling scroll moves content but not fixed chrome, so each strip picks its own offset. Any change larger than a block fails.
+    nonisolated static func sameAfterMicroScroll(_ first: URL, _ second: URL) throws -> Bool {
+        let a = try grayscale(first), b = try grayscale(second)
+        guard a.width == b.width, a.height == b.height else { return false }
+        let width = a.width, height = a.height
+        let strip = 64, reach = 8, margin = 8, block = 16
+        // The top holds the status bar and the bottom the tab bar and mini player, which animate on their own.
+        let top = Int(Double(height) * 0.06), bottom = Int(Double(height) * 0.82)
+        guard bottom - top >= strip * 4, width > margin * 2 + block else { return false }
+        return a.pixels.withUnsafeBufferPointer { p in
+            b.pixels.withUnsafeBufferPointer { q in
+                for y in stride(from: top, to: bottom - strip, by: strip) {
+                    var bestShift = 0, bestTotal = Int.max
+                    for shift in -reach...reach where y + shift >= 0 && y + shift + strip <= height {
+                        var total = 0
+                        for row in stride(from: 0, to: strip, by: 2) {
+                            let ra = (y + row) * width, rb = (y + shift + row) * width
+                            for x in stride(from: margin, to: width - margin, by: 2) { total += abs(Int(p[ra + x]) - Int(q[rb + x])) }
+                        }
+                        if total < bestTotal { bestTotal = total; bestShift = shift }
+                    }
+                    for bx in stride(from: margin, to: width - margin - block, by: block) {
+                        for by in stride(from: 0, through: strip - block, by: block) {
+                            var sum = 0
+                            for row in by..<(by + block) {
+                                let ra = (y + row) * width, rb = (y + bestShift + row) * width
+                                for x in bx..<(bx + block) { sum += abs(Int(p[ra + x]) - Int(q[rb + x])) }
+                            }
+                            if sum > 24 * block * block { return false }
+                        }
+                    }
+                }
+                return true
+            }
+        }
+    }
+
+    private nonisolated static func grayscale(_ url: URL) throws -> (pixels: [UInt8], width: Int, height: Int) {
+        // Bounded so a huge screenshot cannot exhaust memory; the strip thresholds are tuned for phone-sized pixels.
+        let image = try boundedImage(Data(contentsOf: url), maxPixelSize: 3000)
+        let width = image.width, height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height)
+        try pixels.withUnsafeMutableBytes { bytes in
+            guard let context = CGContext(data: bytes.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                                          bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: 0) else {
+                throw CocoaError(.coderInvalidValue)
+            }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        return (pixels, width, height)
+    }
+
     nonisolated static func comparisonPixels(_ url: URL) throws -> [UInt8] {
         try comparisonPixels(Data(contentsOf: url))
     }
@@ -497,11 +628,15 @@ public actor ScreenCatalogAnalyzer {
     }
 
     nonisolated static func proxyImage(_ data: Data) throws -> CGImage {
+        try boundedImage(data, maxPixelSize: 800)
+    }
+
+    nonisolated static func boundedImage(_ data: Data, maxPixelSize: Int) throws -> CGImage {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: 800
+                kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
               ] as CFDictionary) else { throw CocoaError(.fileReadCorruptFile) }
         return image
     }

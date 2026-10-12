@@ -78,7 +78,11 @@ enum ScreenVisionFallback {
 
         var fastName: String? {
             if let pickerName { return pickerName }
-            guard titleConfidence >= 0.85, let title, !title.isEmpty, title.count <= 60 else { return nil }
+            // A lowercase start is a clipped sentence of body text, not a header.
+            guard titleConfidence >= 0.85, let title, !title.isEmpty, title.count <= 60, title.first?.isLowercase != true,
+                  // A lone leading letter may be an icon read as text (a magnifier as "Q"), and only the image tells; leave it to the model.
+                  title.split(separator: " ").first.map({ $0.count > 1 || $0.contains(where: \.isNumber) }) == true
+            else { return nil }
             // ponytail: repeated inset labels are ambiguous forms; keep their state classification with the model.
             let labels = lines.filter {
                 (0.06...0.14).contains($0.box.minX) && (0.12...0.75).contains($0.box.midY)
@@ -91,18 +95,88 @@ enum ScreenVisionFallback {
             return consecutive.count >= 2 ? nil : title
         }
 
+        /// Two independent reads of the same string agree even when each was read with low confidence.
+        func hasSameTitle(as other: Self) -> Bool {
+            guard let title, let otherTitle = other.title, !title.isEmpty else { return false }
+            return Self.normalized(title) == Self.normalized(otherTitle)
+        }
+
+        /// Same header and the same reliable text above the tab bar. Pixels can still differ through animated chrome.
+        func isNearMiss(of other: Self) -> Bool {
+            guard hasSameTitle(as: other) else { return false }
+            func content(_ recognition: Self) -> Set<String> {
+                Set(recognition.lines.filter { $0.confidence >= 0.9 && $0.box.midY > 0.14 }.map { Self.normalized($0.text) })
+            }
+            let current = content(self), previous = content(other)
+            guard current.count >= 4, previous.count >= 4 else { return false }
+            return Double(current.intersection(previous).count) / Double(current.union(previous).count) >= 0.85
+        }
+
+        /// The same page scrolled: several reliable content lines are shared, wherever they sit. Navigation chrome is excluded.
+        func isScrolledContinuation(of other: Self) -> Bool {
+            func content(_ recognition: Self) -> Set<String> {
+                Set(recognition.lines.filter {
+                    $0.confidence >= 0.9 && (0.18...0.94).contains($0.box.midY) && $0.text.count >= 4
+                }.map { Self.normalized($0.text) })
+            }
+            let current = content(self), previous = content(other)
+            let shared = current.intersection(previous).count
+            return shared >= 3 && Double(shared) / Double(min(current.count, previous.count)) >= 0.5
+        }
+
+        /// Equal titles, or titles neither of which was read well enough to tell the screens apart.
+        func hasComparableTitle(with other: Self) -> Bool {
+            hasSameTitle(as: other) || (titleConfidence < 0.85 && other.titleConfidence < 0.85)
+        }
+
+        /// Every reliable line in the content area has the same text at the same place in the other screen, and conversely.
+        func hasSameContentText(as other: Self) -> Bool {
+            func reliable(_ recognition: Self) -> [TextLine] {
+                recognition.lines.filter { $0.confidence >= 0.9 && (0.18...0.94).contains($0.box.midY) }
+            }
+            let current = reliable(self), previous = reliable(other)
+            func covered(_ lines: [TextLine], by others: [TextLine]) -> Bool {
+                lines.allSatisfy { line in
+                    others.contains { Self.normalized($0.text) == Self.normalized(line.text) && abs($0.box.midY - line.box.midY) < 0.012 }
+                }
+            }
+            // A reliable line may be read with less confidence in the other frame, so match against every line there.
+            return current.count >= 4 && previous.count >= 4 && covered(current, by: other.lines) && covered(previous, by: lines)
+        }
+
+        /// Why `sameState` cannot decide. Diagnostics only.
+        func ambiguity(with other: Self) -> String {
+            if title == nil || other.title == nil { return "missingTitle" }
+            if titleConfidence < 0.85 || other.titleConfidence < 0.85 { return "lowTitleConfidence" }
+            if lines.isEmpty || other.lines.isEmpty { return "noText" }
+            return "sameTitleInconclusive"
+        }
+
         /// nil means ambiguous. Text agreement alone never authorizes grouping.
         func sameState(as other: Self) -> Bool? {
-            guard titleConfidence >= 0.85, other.titleConfidence >= 0.85,
-                  let title, let otherTitle = other.title, !lines.isEmpty, !other.lines.isEmpty else { return nil }
-            guard Self.normalized(title) == Self.normalized(otherTitle) else { return false }
+            guard let title, let otherTitle = other.title, !lines.isEmpty, !other.lines.isEmpty else { return nil }
+            let confident = titleConfidence >= 0.85 && other.titleConfidence >= 0.85
+            if confident, Self.normalized(title) != Self.normalized(otherTitle) { return false }
+            // A header read with low confidence (stylized text over artwork) cannot prove a difference.
+            // The rest of the page and its pixels still decide, so a misread header is left out of the comparison.
+            func body(_ lines: [TextLine], _ title: String) -> [TextLine] {
+                confident ? lines : lines.filter { Self.normalized($0.text) != Self.normalized(title) }
+            }
+            let lines = body(lines, title)
+            let otherLines = body(other.lines, otherTitle)
+            guard !lines.isEmpty, !otherLines.isEmpty else { return nil }
             if clearlyDiffers(from: other) { return false }
             let current = Dictionary(grouping: lines, by: { Self.contentText($0.text) })
-            let previous = Dictionary(grouping: other.lines, by: { Self.contentText($0.text) })
+            let previous = Dictionary(grouping: otherLines, by: { Self.contentText($0.text) })
             guard Set(current.keys) == Set(previous.keys), current.allSatisfy({ previous[$0.key]?.count == $0.value.count }) else {
                 // Stable text gaining a reliable badge/value/error is a changed state, not scrolling.
                 let reliable = Set(lines.filter { $0.confidence >= 0.9 }.map { Self.contentText($0.text) })
-                let otherReliable = Set(other.lines.filter { $0.confidence >= 0.9 }.map { Self.contentText($0.text) })
+                let otherReliable = Set(otherLines.filter { $0.confidence >= 0.9 }.map { Self.contentText($0.text) })
+                // Near-identical pixels with the same reliable text differ only by OCR jitter on faint lines.
+                if reliable.count >= 3, reliable == otherReliable,
+                   let difference = Self.tileDifference(pixels, other.pixels, width: 128, height: 256), difference <= 3 {
+                    return true
+                }
                 let union = reliable.union(otherReliable)
                 if reliable.count >= 4, otherReliable.count >= 4,
                    Double(reliable.intersection(otherReliable).count) / Double(union.count) < 0.5 { return false }
@@ -112,7 +186,7 @@ enum ScreenVisionFallback {
                     return abs(a[0].box.midY - b[0].box.midY) < 0.008
                 }
                 let additions = lines.filter { previous[Self.contentText($0.text)] == nil }
-                    + other.lines.filter { current[Self.contentText($0.text)] == nil }
+                    + otherLines.filter { current[Self.contentText($0.text)] == nil }
                 return stationary && additions.allSatisfy { $0.confidence >= 0.85 } ? false : nil
             }
             if let difference = Self.tileDifference(pixels, other.pixels, width: 128, height: 256), difference <= 6 {
@@ -263,7 +337,7 @@ enum ScreenVisionFallback {
                                 body: recognizedLines.filter { $0.box.midY < header.boundingBox.minY })
                         }
                         let recognition = Recognition(
-                            title: titleText.map { ScreenClassification(screenID: 0, name: $0).name },
+                            title: titleText.map { ScreenClassification(screenID: 0, name: droppingLeadingIcon($0)).name },
                             pickerName: picker,
                             lines: recognizedLines.filter { $0.box.midY <= (sheet.map { $0.boundingBox.maxY + 0.04 } ?? 0.94) },
                             titleConfidence: title?.topCandidates(1).first?.confidence ?? 0,
@@ -283,6 +357,13 @@ enum ScreenVisionFallback {
         }
         try Task.checkCancellation()
         return recognition
+    }
+
+    /// Vision reads a leading icon (a chevron, a close cross) as a one-character word. A symbol is never a word in any language.
+    static func droppingLeadingIcon(_ text: String) -> String {
+        let words = text.split(separator: " ", maxSplits: 1)
+        guard words.count == 2, words[0].count == 1, !words[0].contains(where: { $0.isLetter || $0.isNumber }) else { return text }
+        return String(words[1])
     }
 
     static func numericPickerName(title: String, confidence: Float, body: [TextLine]) -> String? {

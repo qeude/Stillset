@@ -133,6 +133,7 @@ public final class SessionModel {
     var errorMessage: String?
     private(set) var catalogDetail: String?
     private(set) var refinementDetail: String?
+    private(set) var refinementFraction: Double?
     private(set) var isExporting = false
     var exportedFolderURL: URL?
     var progress = AnalysisProgress(stage: .exporting, fraction: 0, detail: String(localized: "Saving PNGs", bundle: .module))
@@ -146,6 +147,7 @@ public final class SessionModel {
     private var knownReadyIDs: Set<OccurrenceID> = []
     private let catalogAnalyzer = ScreenCatalogAnalyzer()
     private let catalogRunner: SessionCatalogRunner?
+    let refinesAutomatically: Bool
     private var catalogTask: Task<Void, Never>?
     private var catalogToken: UUID?
     private var pendingCatalog: (snapshot: SessionCatalogSnapshot, refined: Bool)?
@@ -174,10 +176,13 @@ public final class SessionModel {
     }
 
     public convenience init(preferences: AppPreferences, diagnostics: DiagnosticJournal? = nil) {
-        self.init(preferences: preferences, imports: VideoImportQueue(diagnostics: diagnostics), diagnostics: diagnostics)
+        self.init(preferences: preferences, imports: VideoImportQueue(diagnostics: diagnostics), diagnostics: diagnostics,
+                  refinesAutomatically: true)
     }
 
-    init(preferences: AppPreferences, imports: VideoImportQueue, catalogRunner: SessionCatalogRunner? = nil, diagnostics: DiagnosticJournal? = nil) {
+    init(preferences: AppPreferences, imports: VideoImportQueue, catalogRunner: SessionCatalogRunner? = nil, diagnostics: DiagnosticJournal? = nil,
+         refinesAutomatically: Bool = false) {
+        self.refinesAutomatically = refinesAutomatically
         self.diagnostics = diagnostics
         self.preferences = preferences
         self.imports = imports
@@ -193,7 +198,8 @@ public final class SessionModel {
     public func replacingVideos(_ urls: [URL]) -> SessionModel {
         let pendingStartup = startupTask
         cancelSessionWork()
-        let next = SessionModel(preferences: preferences, imports: VideoImportQueue(paused: true, diagnostics: diagnostics), diagnostics: diagnostics)
+        let next = SessionModel(preferences: preferences, imports: VideoImportQueue(paused: true, diagnostics: diagnostics), diagnostics: diagnostics,
+                                refinesAutomatically: refinesAutomatically)
         next.imports.enqueue(urls)
         next.startupTask = Task { [weak next] in
             await pendingStartup?.value
@@ -502,8 +508,10 @@ public final class SessionModel {
         activeCatalogRequest = request
         let token = UUID()
         catalogToken = token
-        if request.refined { refinementDetail = String(localized: "Refining screenshots…", bundle: .module) }
-        else { catalogDetail = String(localized: "Organizing session…", bundle: .module) }
+        if request.refined {
+            refinementDetail = String(localized: "Refining screenshots…", bundle: .module)
+            refinementFraction = 0
+        } else { catalogDetail = String(localized: "Organizing session…", bundle: .module) }
         let runner = catalogRunner
         let analyzer = catalogAnalyzer
         let work = imports.processing.catalogLane
@@ -514,13 +522,16 @@ public final class SessionModel {
                   self.activeCatalogRequest?.refined == request.refined, !self.imports.isBusy,
                   self.catalogSnapshot == request.snapshot else { return false }
             let detail = "\(fraction.formatted(.percent.precision(.fractionLength(0))))"
-            if request.refined { self.refinementDetail = String(localized: "Refining screenshots… \(detail)", bundle: .module) }
-            else { self.catalogDetail = String(localized: "Organizing session… \(detail)", bundle: .module) }
+            if request.refined {
+                self.refinementDetail = String(localized: "Refining screenshots… \(detail)", bundle: .module)
+                self.refinementFraction = fraction
+            } else { self.catalogDetail = String(localized: "Organizing session… \(detail)", bundle: .module) }
             return true
         }
         catalogTask = Task.detached(priority: .utility) { [weak self] in
             let diagnostic = await diagnostics?.begin(request.refined ? .refinement : .sessionCatalog)
             await diagnostic?.stage(.cataloging)
+            var quickPassApplied = false
             do {
                 let progress: @Sendable (Double, String) async throws -> Void = { fraction, detail in
                     try await delivery.update(fraction, detail)
@@ -561,6 +572,7 @@ public final class SessionModel {
                     }
                     return applied
                 }
+                quickPassApplied = accepted && !request.refined
                 if accepted, request.refined, result.recognitionFailures == 0, result.errorDescription == nil, let self {
                     for model in await self.imports.models {
                         let inputs = request.snapshot.inputs.enumerated().filter { $0.element.id.videoID == model.id }
@@ -584,13 +596,19 @@ public final class SessionModel {
                     return true
                 }
             }
+            let refineNext = quickPassApplied
             await MainActor.run {
                 guard let self, self.catalogToken == token else { return }
                 self.catalogToken = nil
                 self.catalogTask = nil
                 self.activeCatalogRequest = nil
-                if request.refined { self.refinementDetail = nil } else { self.catalogDetail = nil }
+                if request.refined { self.refinementDetail = nil; self.refinementFraction = nil } else { self.catalogDetail = nil }
                 self.startPendingCatalog()
+                // Apple Intelligence starts as soon as the quick pass has organized the session, unless a stored refinement exists.
+                if refineNext, self.refinesAutomatically, self.catalogTask == nil, self.pendingCatalog == nil, self.refinedMetadata.isEmpty,
+                   self.catalogSnapshot == request.snapshot {
+                    self.requestCatalog(refined: true)
+                }
             }
         }
     }
