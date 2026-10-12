@@ -34,11 +34,14 @@ struct ResultsView: View {
             .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: showsSessionStatus)
             .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: model.imports.models.count > 1)
             .padding(.bottom, 12)
-            if !showsSessionStatus, let video = model.imports.models.first {
-                SingleVideoStatus(video: video, session: model, cancel: cancelSingleVideo, reduceMotion: reduceMotion)
-            } else {
-                Color.clear.frame(height: 36).accessibilityHidden(true)
+            Group {
+                if !showsSessionStatus, let video = model.imports.models.first {
+                    SingleVideoStatus(video: video, session: model, cancel: cancelSingleVideo, reduceMotion: reduceMotion)
+                } else {
+                    Color.clear.frame(height: 36).accessibilityHidden(true)
+                }
             }
+            .padding(.bottom, 56)
             SessionExportStatus(model: model)
             SessionNotice(model: model)
             SessionTimeline(model: model, reduceMotion: reduceMotion, keyboardTarget: keyboardTarget)
@@ -61,39 +64,116 @@ private struct SingleVideoStatus: View {
     let cancel: () -> Void
     let reduceMotion: Bool
 
-    private var isVisible: Bool {
-        video.importState.isPending || video.importState.canRetry || session.refinementDetail != nil
+    /// The block exists for the whole run, so one bar carries the progression from the first frame to the last refinement.
+    @State private var isShown = false
+    @State private var isFinishing = false
+    @State private var floor = 0.0
+
+    private var isActive: Bool {
+        video.importState.isPending || session.catalogDetail != nil || session.refinementDetail != nil
+    }
+
+    private var isVisible: Bool { isShown || video.importState.canRetry }
+
+    /// One progression for the whole run: frames 0–15 %, screens 15–25 %, Apple Intelligence 25–100 %.
+    private var step: (title: LocalizedStringResource, fraction: Double) {
+        let bundle = LocalizedStringResource.BundleDescription.atURL(Bundle.module.bundleURL)
+        if let refinement = session.refinementFraction {
+            return (LocalizedStringResource("Improving with AI…", bundle: bundle), 0.25 + 0.75 * refinement)
+        }
+        let screens = LocalizedStringResource("Finding screens…", bundle: bundle)
+        guard video.importState.isPending else { return (screens, 0.25) }
+        let fraction = video.progress.fraction
+        switch video.progress.stage {
+        case .decoding, .exporting: return (LocalizedStringResource("Analyzing frames…", bundle: bundle), 0.15 * fraction)
+        case .annotating: return (screens, 0.15 + 0.10 * fraction)
+        default: return (screens, 0.15)
+        }
+    }
+
+    /// Never goes backwards within a run, and ends full.
+    private var shownFraction: Double { isFinishing ? 1 : max(floor, step.fraction) }
+
+    private var canStop: Bool {
+        video.importState == .running || video.importState == .queued || session.refinementDetail != nil
+    }
+
+    private func stop() {
+        if video.importState == .running || video.importState == .queued { cancel() } else { session.cancelRefinement() }
     }
 
     var body: some View {
         ZStack {
-            if isVisible {
+            if isShown {
                 HStack(spacing: 12) {
-                    if video.importState.isPending {
-                        ProgressView(value: video.progress.fraction)
-                            .tint(StillsetStyle.accent)
-                            .frame(width: 240)
-                            .accessibilityLabel(LocalizedStringResource("Analysis progress", bundle: .atURL(Bundle.module.bundleURL)))
+                    Color.clear.frame(width: 32, height: 32)
+                    VStack(alignment: .leading, spacing: 4) {
+                        ProgressBar(fraction: shownFraction, animated: !reduceMotion)
+                        Text(step.title).font(.caption).foregroundStyle(.secondary)
                     }
-                    if video.importState == .running || video.importState == .queued {
-                        Button(LocalizedStringResource("Cancel", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "stop.circle", action: cancel)
-                            .help(Text("Cancel analysis", bundle: .module))
-                    } else if video.importState.canRetry {
-                        Button(LocalizedStringResource("Retry", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "arrow.clockwise") { session.imports.retry(video) }
-                            .disabled(!session.imports.canRetry(video))
-                    }
-                    if session.refinementDetail != nil {
-                        Button(LocalizedStringResource("Stop Refinement", bundle: .atURL(Bundle.module.bundleURL)), action: session.cancelRefinement)
-                    }
+                    .frame(width: ProgressBar.width)
+                    // Aligns the stop button with the bar rather than with the whole block.
+                    .alignmentGuide(VerticalAlignment.center) { _ in ProgressBar.height / 2 }
+                    // Always present during the run, so nothing around the bar moves when it becomes unavailable.
+                    Button(LocalizedStringResource("Cancel", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "stop.fill", action: stop)
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.circle)
+                        .controlSize(.regular)
+                        .tint(.primary)
+                        .disabled(!canStop || isFinishing)
+                        .help(Text("Cancel analysis", bundle: .module))
+                        .frame(width: 32, height: 32)
                 }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
-                .tint(.primary)
                 .transition(.opacity)
+            } else if video.importState.canRetry {
+                Button(LocalizedStringResource("Retry", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "arrow.clockwise") { session.imports.retry(video) }
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.capsule)
+                    .tint(.primary)
+                    .disabled(!session.imports.canRetry(video))
+                    .transition(.opacity)
             }
         }
         .frame(height: 36, alignment: .top)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: isVisible)
+        .onAppear { if isActive { isShown = true } }
+        .onChange(of: step.fraction) { _, new in if isActive { floor = max(floor, new) } }
+        .onChange(of: isActive) { _, active in
+            if active { isShown = true; isFinishing = false; return }
+            // Work often hands over between stages with a short idle gap; only a lasting idle means the run is over.
+            Task {
+                try? await Task.sleep(for: .seconds(1))
+                guard !isActive else { return }
+                isFinishing = true
+                try? await Task.sleep(for: .milliseconds(700))
+                guard !isActive else { return }
+                isShown = false; isFinishing = false; floor = 0
+            }
+        }
+    }
+}
+
+/// A bar that glides between reported values, so the slow model calls still read as continuous progress.
+private struct ProgressBar: View {
+    nonisolated static let height: CGFloat = 6
+    nonisolated static let width: CGFloat = 240
+    let fraction: Double
+    let animated: Bool
+
+    var body: some View {
+        // The fill only slides under a clip, so it can never drift away from the track.
+        Capsule().fill(.quaternary)
+            .overlay(alignment: .leading) {
+                Rectangle().fill(StillsetStyle.accent)
+                    .offset(x: -Self.width * (1 - min(max(fraction, 0), 1)))
+            }
+            .clipShape(Capsule())
+            .frame(width: Self.width, height: Self.height)
+            .animation(animated ? .linear(duration: 2.5) : nil, value: fraction)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(LocalizedStringResource("Analysis progress", bundle: .atURL(Bundle.module.bundleURL)))
+            .accessibilityValue(Text(fraction, format: .percent.precision(.fractionLength(0))))
     }
 }
 

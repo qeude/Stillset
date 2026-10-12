@@ -94,6 +94,40 @@ struct SessionModelTests {
         #expect(!queue.isBusy)
     }
 
+    @Test func quickPassIsFollowedByAutomaticRefinementOnlyWhenEnabled() async {
+        for automatic in [true, false] {
+            let imports = ControlledAnalysisRunner()
+            let queue = VideoImportQueue(runner: imports.run)
+            let catalog = ControlledCatalogRunner()
+            let session = SessionModel(preferences: preferences(), imports: queue, catalogRunner: catalog.run,
+                                       refinesAutomatically: automatic)
+            queue.enqueue([URL(fileURLWithPath: "/tmp/A.mov")])
+            let a = queue.models[0]
+            let run = await imports.waitForStart(a)
+            run.publish { $0.screenshots = [capture(0)] }
+            imports.finish(a, with: .completed)
+            await queue.waitUntilDrained()
+            await catalog.waitForStart(0)
+            #expect(!catalog.runs[0].refined)
+            catalog.finish(0, labels: [label(1, 1)])
+            if automatic {
+                await catalog.waitForStart(1)
+                #expect(catalog.runs[1].refined)
+                catalog.finish(1, labels: [label(1, 1)])
+            }
+            await session.waitForCatalog()
+            #expect(catalog.runs.count == (automatic ? 2 : 1))
+        }
+    }
+
+    @Test func replacingVideosKeepsAutomaticRefinement() {
+        for automatic in [true, false] {
+            let session = SessionModel(preferences: preferences(), imports: VideoImportQueue(runner: ControlledAnalysisRunner().run),
+                                       refinesAutomatically: automatic)
+            #expect(session.replacingVideos([]).refinesAutomatically == automatic)
+        }
+    }
+
     @Test func importDrainDoesNotRestartAnExplicitlyStoppedRefinement() async {
         let imports = ControlledAnalysisRunner()
         let queue = VideoImportQueue(runner: imports.run)

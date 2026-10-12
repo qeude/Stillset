@@ -38,7 +38,7 @@ public struct CachedAnalysis: Sendable {
 public actor RecentAnalysisCache {
     public static let shared = RecentAnalysisCache()
     public static let schemaVersion = 2
-    public static let analysisVersion = 1
+    public static let analysisVersion = 5
 
     public struct Source: Sendable {
         fileprivate let url: URL
