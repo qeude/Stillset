@@ -588,8 +588,8 @@ public actor ScreenCatalogAnalyzer {
     }
 
     private nonisolated static func grayscale(_ url: URL) throws -> (pixels: [UInt8], width: Int, height: Int) {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw CocoaError(.fileReadCorruptFile) }
+        // Bounded so a huge screenshot cannot exhaust memory; the strip thresholds are tuned for phone-sized pixels.
+        let image = try boundedImage(Data(contentsOf: url), maxPixelSize: 3000)
         let width = image.width, height = image.height
         var pixels = [UInt8](repeating: 0, count: width * height)
         try pixels.withUnsafeMutableBytes { bytes in
@@ -628,11 +628,15 @@ public actor ScreenCatalogAnalyzer {
     }
 
     nonisolated static func proxyImage(_ data: Data) throws -> CGImage {
+        try boundedImage(data, maxPixelSize: 800)
+    }
+
+    nonisolated static func boundedImage(_ data: Data, maxPixelSize: Int) throws -> CGImage {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: 800
+                kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
               ] as CFDictionary) else { throw CocoaError(.fileReadCorruptFile) }
         return image
     }
