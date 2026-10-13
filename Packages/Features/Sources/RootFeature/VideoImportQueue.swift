@@ -25,8 +25,8 @@ enum VideoImportState: Equatable, Sendable {
         case .queued: String(localized: "Queued", bundle: .module)
         case .running: String(localized: "Analyzing", bundle: .module)
         case .cancelling: String(localized: "Cancelling…", bundle: .module)
-        case .failed: String(localized: "Analysis Failed", bundle: .module)
-        case .cancelled: String(localized: "Analysis Cancelled", bundle: .module)
+        case .failed: String(localized: "Analysis failed", bundle: .module)
+        case .cancelled: String(localized: "Analysis cancelled", bundle: .module)
         }
     }
     var failure: String? {
@@ -98,7 +98,7 @@ public final class VideoImportQueue {
         enqueue(urls.filter(Self.supportsVideo))
     }
 
-    private static func supportsVideo(_ url: URL) -> Bool {
+    static func supportsVideo(_ url: URL) -> Bool {
         url.isFileURL && ["mov", "mp4"].contains(url.pathExtension.lowercased())
     }
 

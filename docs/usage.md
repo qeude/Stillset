@@ -6,11 +6,11 @@ This guide uses the English interface labels. Stillset also supports French and 
 
 ## Importing recordings
 
-Drop one or more recordings into the window or choose **Open…** to select multiple files. Videos enter a local queue in import order, with at most two simultaneous analyses. The toolbar **+** and **File → Open Recordings…** (**⌘O**) show a new session immediately; its queued videos start once previous work has stopped; cancelling the chooser preserves the current session. Use **File → Add Videos to Session…** (**⇧⌘O**) to append recordings while retaining the current results. Waiting videos start when a slot is freed by a finished analysis or a drained cancellation. Captures appear as finalized pauses are exported, while the rest of each recording is still decoded.
+Drop one or more recordings into the window or choose **Open…** to select multiple files. Videos enter a local queue in import order, with at most two simultaneous analyses. When a session is open, the toolbar **+** offers **Add Videos to Session…** or **New Session…**, and dropping files shows **Add to this session** and **Start a new session** zones. Choose a fixed behavior in **Settings → When a session is open**. **File → Add Videos to Session…** (**⇧⌘O**) appends recordings while retaining the current results. **File → Open Recordings…** (**⌘O**) shows a new session immediately; its queued videos start once previous work has stopped; cancelling the chooser preserves the current session. **File → Close Session** returns to the start screen. Waiting videos start when a slot is freed by a finished analysis or a drained cancellation. Captures appear as finalized pauses are exported, while the rest of each recording is still decoded.
 
 ## Browsing captures
 
-Review every video in one timeline with one selection, focus, and set of filters. **Chronology** has video chapters in import order and captures in each recording’s local timestamp order, regardless of completion order. **By Screen** joins local screen categories across recordings only when the session catalog positively matches a state. Equal names alone keep separate groups. **Unique** shows the first occurrence of each matched state; **All** restores every occurrence. Different states in a joined screen family remain distinct. Background matching preserves selected or focused repeats until you explicitly apply a filter.
+Review every video in one timeline with one selection, focus, and set of filters. **Chronology** has video chapters in import order and captures in each recording’s local timestamp order, regardless of completion order. **By screen** joins local screen categories across recordings only when the session catalog positively matches a state. Equal names alone keep separate groups. **Unique** shows the first occurrence of each matched state; **All** restores every occurrence. Different states in a joined screen family remain distinct. Background matching preserves selected or focused repeats until you explicitly apply a filter.
 
 ## Selecting captures
 
@@ -18,7 +18,7 @@ Click to select, Command-click to add captures, Shift-click to select a range, o
 
 ## Exporting PNGs
 
-Drag the selection or press **⌘C** to copy its staged PNG files in source chronology, with videos in import order. Use **Export…** or **⌘S** to save selected visible captures in the current timeline order. Saving assigns consecutive numbers and safe screen names, such as `001_account.png`. **Chronology** always saves into one folder. **By Screen** also uses one folder by default, with groups in first-appearance order and captures chronological within each group. Existing destination files are never overwritten.
+Drag the selection or press **⌘C** to copy its staged PNG files in source chronology, with videos in import order. Use **Export…** or **⌘S** to save selected visible captures in the current timeline order. Saving assigns consecutive numbers and safe screen names, such as `001_account.png`. **Chronology** always saves into one folder. **By screen** also uses one folder by default, with groups in first-appearance order and captures chronological within each group. Existing destination files are never overwritten.
 
 ## Cancellation, retries, and errors
 
@@ -26,7 +26,7 @@ Use **Cancel** on a running video to stop that video's analysis. Its partial cap
 
 ## Settings and export folders
 
-Open **Stillset → Settings…** (**⌘,**) to choose **Unique / All** and **Chronology / By Screen** defaults for the next session. Settings do not reset a live session’s filters or selection; timeline filters apply to the whole session. For the next **By Screen** export, Settings also offers **One Folder per Screen**, for example `001_account/001_account.png`. Distinct screens keep separate folders even when their names match, and unclassified captures use **Unidentified**. Export freezes the selected captures, names and layout before opening the destination chooser; background refinement can continue. Saved PNGs are independent copies of the original-resolution bytes.
+Open **Stillset → Settings…** (**⌘,**) to choose **Unique / All** and **Chronology / By screen** defaults for the next session. Settings do not reset a live session’s filters or selection; timeline filters apply to the whole session. For the next **By screen** export, Settings also offers **One folder per screen**, for example `001_account/001_account.png`. Distinct screens keep separate folders even when their names match, and unclassified captures use **Unidentified**. Export freezes the selected captures, names and layout before opening the destination chooser; background refinement can continue. Saved PNGs are independent copies of the original-resolution bytes.
 
 ## Recognition and optional AI refinement
 

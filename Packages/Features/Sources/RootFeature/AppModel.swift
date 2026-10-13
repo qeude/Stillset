@@ -299,7 +299,7 @@ public final class AppModel: Identifiable {
             importState = terminal
             switch terminal {
             case .completed: progress = AnalysisProgress(stage: .complete, fraction: 1, detail: String(localized: "\(screenshots.count) screenshots ready", bundle: .module))
-            case .cancelled: progress = AnalysisProgress(stage: .cancelled, fraction: 0, detail: String(localized: "Analysis Cancelled", bundle: .module))
+            case .cancelled: progress = AnalysisProgress(stage: .cancelled, fraction: 0, detail: String(localized: "Analysis cancelled", bundle: .module))
             case .failed(let message): errorMessage = message
             default: preconditionFailure("Analysis runner must return a terminal state")
             }
@@ -748,7 +748,7 @@ public final class AppModel: Identifiable {
                         model.analysisOutcome = cancelled ? .cancelled : .failed(message)
                         model.analysisOperation = nil
                         if cancelled {
-                            model.progress = AnalysisProgress(stage: .cancelled, fraction: 0, detail: String(localized: "Analysis Cancelled", bundle: .module))
+                            model.progress = AnalysisProgress(stage: .cancelled, fraction: 0, detail: String(localized: "Analysis cancelled", bundle: .module))
                         } else {
                             model.errorMessage = message
                         }

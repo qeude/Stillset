@@ -118,7 +118,7 @@ public final class SessionModel {
     public let imports: VideoImportQueue
     let thumbnailLoader: ThumbnailLoader
     private let diagnostics: DiagnosticJournal?
-    private let preferences: AppPreferences
+    let preferences: AppPreferences
     private(set) var showsUniqueScreens: Bool
     private(set) var groupsTimelineByScreen: Bool
     private(set) var selectedScreenshotIDs: Set<OccurrenceID> = []
@@ -238,6 +238,7 @@ public final class SessionModel {
     }
 
     var isAnalyzing: Bool { imports.models.contains { $0.isAnalyzing } }
+    public var hasVideos: Bool { !imports.models.isEmpty }
     public var hasScreenshots: Bool { !projection.readyInChronology.isEmpty }
     public var canCopySelection: Bool { !selectedScreenshots.isEmpty }
     public var canSaveSelection: Bool { canCopySelection && !isExporting }

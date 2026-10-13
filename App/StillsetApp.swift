@@ -23,7 +23,7 @@ struct StillsetApp: App {
 
     var body: some Scene {
         WindowGroup {
-            StillsetRootView(session: session, openVideos: openVideos, cancelSingleVideo: cancelSingleVideo)
+            StillsetRootView(session: session, openVideos: openVideos, replaceVideos: replaceVideos, cancelSingleVideo: cancelSingleVideo)
                 .frame(minWidth: 820, minHeight: 620)
                 .task { await diagnostics.prepare() }
         }
@@ -39,6 +39,8 @@ struct StillsetApp: App {
                     .keyboardShortcut("o", modifiers: .command)
                 Button("Add Videos to Session…", action: session.imports.chooseVideos)
                     .keyboardShortcut("o", modifiers: [.command, .shift])
+                Button("Close Session", action: cancelSingleVideo)
+                    .disabled(!session.hasVideos)
             }
             CommandGroup(replacing: .pasteboard) {
                 Button("Copy Screenshots", action: session.copySelection)
@@ -62,6 +64,10 @@ struct StillsetApp: App {
 
     private func openVideos() {
         guard let urls = VideoImportQueue.chooseVideoURLs(), !urls.isEmpty else { return }
+        replaceVideos(urls)
+    }
+
+    private func replaceVideos(_ urls: [URL]) {
         session = session.replacingVideos(urls)
     }
 

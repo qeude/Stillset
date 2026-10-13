@@ -9,7 +9,7 @@ struct ImportView: View {
                 .frame(maxWidth: 500)
                 .frame(height: 300)
 
-            Text("Drop Your Videos", bundle: .module)
+            Text("Drop your videos", bundle: .module)
                 .font(.system(size: 29, weight: .semibold))
                 .foregroundStyle(StillsetStyle.ink)
 

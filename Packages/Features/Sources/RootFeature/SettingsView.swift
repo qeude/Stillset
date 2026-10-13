@@ -9,21 +9,29 @@ public struct SettingsView: View {
 
     public var body: some View {
         Form {
-            Section(LocalizedStringResource("Defaults for the Next Session", bundle: .atURL(Bundle.module.bundleURL))) {
+            Section(LocalizedStringResource("Defaults for the next session", bundle: .atURL(Bundle.module.bundleURL))) {
                 Picker(LocalizedStringResource("Screenshots", bundle: .atURL(Bundle.module.bundleURL)), selection: $preferences.captureDefault) {
                     Text("Unique", bundle: .module).tag(AppPreferences.CaptureDefault.uniques)
                     Text("All", bundle: .module).tag(AppPreferences.CaptureDefault.all)
                 }
                 Picker(LocalizedStringResource("Organization", bundle: .atURL(Bundle.module.bundleURL)), selection: $preferences.organisationDefault) {
                     Text("Chronology", bundle: .module).tag(AppPreferences.OrganisationDefault.chronology)
-                    Text("By Screen", bundle: .module).tag(AppPreferences.OrganisationDefault.byScreen)
+                    Text("By screen", bundle: .module).tag(AppPreferences.OrganisationDefault.byScreen)
                 }
             }
 
             Section {
-                Picker(LocalizedStringResource("Export by Screen", bundle: .atURL(Bundle.module.bundleURL)), selection: $preferences.screenExportLayout) {
-                    Text("One Folder", bundle: .module).tag(AppPreferences.ScreenExportLayout.singleFolder)
-                    Text("One Folder per Screen", bundle: .module).tag(AppPreferences.ScreenExportLayout.folders)
+                Picker(LocalizedStringResource("When a session is open", bundle: .atURL(Bundle.module.bundleURL)), selection: $preferences.existingSessionAction) {
+                    Text("Ask", bundle: .module).tag(AppPreferences.ExistingSessionAction.ask)
+                    Text("Add to this session", bundle: .module).tag(AppPreferences.ExistingSessionAction.add)
+                    Text("Start a new session", bundle: .module).tag(AppPreferences.ExistingSessionAction.replace)
+                }
+            }
+
+            Section {
+                Picker(LocalizedStringResource("Export by screen", bundle: .atURL(Bundle.module.bundleURL)), selection: $preferences.screenExportLayout) {
+                    Text("One folder", bundle: .module).tag(AppPreferences.ScreenExportLayout.singleFolder)
+                    Text("One folder per screen", bundle: .module).tag(AppPreferences.ScreenExportLayout.folders)
                 }
             }
         }

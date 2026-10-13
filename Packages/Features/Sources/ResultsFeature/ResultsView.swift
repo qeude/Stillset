@@ -298,7 +298,7 @@ private struct UnavailableSessionPreview: View {
     let isAnalyzing: Bool
 
     var body: some View {
-        ContentUnavailableView(LocalizedStringResource("Session Screenshots", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "photo.on.rectangle",
+        ContentUnavailableView(LocalizedStringResource("Session screenshots", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "photo.on.rectangle",
             description: Text(isAnalyzing ? LocalizedStringResource("Screenshots will appear during analysis.", bundle: .atURL(Bundle.module.bundleURL)) : LocalizedStringResource("Check video status to retry or add a recording.", bundle: .atURL(Bundle.module.bundleURL))))
     }
 }

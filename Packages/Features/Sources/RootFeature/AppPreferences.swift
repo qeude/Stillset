@@ -16,10 +16,15 @@ public final class AppPreferences {
         case singleFolder, folders
     }
 
+    public enum ExistingSessionAction: String, CaseIterable {
+        case ask, add, replace
+    }
+
     enum Keys {
         static let captures = "defaultCaptures"
         static let organisation = "defaultOrganisation"
         static let exportLayout = "screenExportLayout"
+        static let existingSession = "existingSessionAction"
     }
 
     private let defaults: UserDefaults
@@ -34,6 +39,10 @@ public final class AppPreferences {
         didSet { defaults.set(screenExportLayout.rawValue, forKey: Keys.exportLayout) }
     }
 
+    public var existingSessionAction: ExistingSessionAction {
+        didSet { defaults.set(existingSessionAction.rawValue, forKey: Keys.existingSession) }
+    }
+
     public init(defaults: UserDefaults) {
         self.defaults = defaults
         captureDefault = (defaults.object(forKey: Keys.captures) as? String)
@@ -42,5 +51,7 @@ public final class AppPreferences {
             .flatMap(OrganisationDefault.init(rawValue:)) ?? .chronology
         screenExportLayout = (defaults.object(forKey: Keys.exportLayout) as? String)
             .flatMap(ScreenExportLayout.init(rawValue:)) ?? .singleFolder
+        existingSessionAction = (defaults.object(forKey: Keys.existingSession) as? String)
+            .flatMap(ExistingSessionAction.init(rawValue:)) ?? .ask
     }
 }
