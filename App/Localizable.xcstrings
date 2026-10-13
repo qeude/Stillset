@@ -34,6 +34,22 @@
         }
       }
     },
+    "Close Session": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Close Session"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fermer la session"
+          }
+        }
+      }
+    },
     "Copy Screenshots": {
       "localizations": {
         "en": {

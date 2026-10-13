@@ -7,10 +7,10 @@ struct LocalizationTests {
     func interfaceAndExportCounts(language: String) throws {
         let path = try #require(Bundle.module.path(forResource: language, ofType: "lproj"))
         let bundle = try #require(Bundle(path: path))
-        #expect(String(localized: "Drop Your Videos", bundle: bundle)
-            == (language == "fr" ? "Déposez vos vidéos" : "Drop Your Videos"))
-        #expect(String(localized: "One Folder per Screen", bundle: bundle)
-            == (language == "fr" ? "Un dossier par écran" : "One Folder per Screen"))
+        #expect(String(localized: "Drop your videos", bundle: bundle)
+            == (language == "fr" ? "Déposez vos vidéos" : "Drop your videos"))
+        #expect(String(localized: "One folder per screen", bundle: bundle)
+            == (language == "fr" ? "Un dossier par écran" : "One folder per screen"))
         let single = 1
         let multiple = 2
         #expect(String(localized: "\(single) screenshots copied.", bundle: bundle)

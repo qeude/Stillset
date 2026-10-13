@@ -1,36 +1,42 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 public struct StillsetRootView: View {
     let session: SessionModel
     let openVideos: () -> Void
+    let replaceVideos: ([URL]) -> Void
     let cancelSingleVideo: () -> Void
     @State private var isDropTargeted = false
+    @State private var hoveredZone: DropZone?
+    @State private var dropToken = DropToken()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    public init(session: SessionModel, openVideos: @escaping () -> Void, cancelSingleVideo: @escaping () -> Void) {
+    private enum DropZone { case add, replace }
+
+    public init(session: SessionModel, openVideos: @escaping () -> Void, replaceVideos: @escaping ([URL]) -> Void,
+                cancelSingleVideo: @escaping () -> Void) {
         self.session = session
         self.openVideos = openVideos
+        self.replaceVideos = replaceVideos
         self.cancelSingleVideo = cancelSingleVideo
     }
 
     public var body: some View {
         Group {
             if session.imports.models.isEmpty {
-                ImportView(chooseVideos: openVideos)
+                ImportView(chooseVideos: openVideos).transition(.opacity)
             } else {
-                ResultsView(model: session, cancelSingleVideo: cancelSingleVideo)
+                ResultsView(model: session, cancelSingleVideo: cancelSingleVideo).transition(.opacity)
             }
         }
+        .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: session.imports.models.isEmpty)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .tint(StillsetStyle.accent)
         .background { StillsetBackground() }
         .navigationTitle("Stillset")
         .toolbar {
             if !session.imports.models.isEmpty {
-                ToolbarItem {
-                    Button(LocalizedStringResource("Open Recordings…", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "plus", action: openVideos)
-                        .labelStyle(.iconOnly)
-                        .help(Text("Open a new session…", bundle: .module))
-                }
+                ToolbarItem { openControl }
                 ToolbarSpacer(.flexible)
                 ToolbarItem { filtersMenu }
                 ToolbarItem {
@@ -42,15 +48,94 @@ public struct StillsetRootView: View {
             }
         }
         .overlay {
-            if isDropTargeted {
-                RoundedRectangle(cornerRadius: 18)
-                    .strokeBorder(StillsetStyle.accent, style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
-                    .padding(10).allowsHitTesting(false)
+            if showsDropOverlay {
+                HStack(spacing: 16) { dropZones }
+                    .padding(10)
+                    .background { StillsetBackground() }
+                    .transition(.opacity)
             }
         }
-        .dropDestination(for: URL.self) { urls, _ in
-            session.imports.enqueueDroppedVideos(urls)
-        } isTargeted: { isDropTargeted = $0 }
+        .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: showsDropOverlay)
+        .onDrop(of: [.fileURL], delegate: VideoDropDelegate(token: dropToken, verifies: true, isTargeted: $isDropTargeted) {
+            drop($0, session.preferences.existingSessionAction == .replace ? .replace : .add)
+        })
+    }
+
+    private var showsDropOverlay: Bool { isDropTargeted || hoveredZone != nil }
+
+    @ViewBuilder private var dropZones: some View {
+        let add = dropZone(.add, Text("Add to this session", bundle: .module), systemImage: "plus.rectangle.on.rectangle")
+        let new = dropZone(.replace, Text("Start a new session", bundle: .module), systemImage: "rectangle.badge.plus")
+        if session.imports.models.isEmpty {
+            dropZone(.add, Text("Drop your videos", bundle: .module), systemImage: "square.and.arrow.down")
+        } else {
+            switch session.preferences.existingSessionAction {
+            case .ask: add; new
+            case .add: add
+            case .replace: new
+            }
+        }
+    }
+
+    @ViewBuilder private var openControl: some View {
+        let add = LocalizedStringResource("Add Videos to Session…", bundle: .atURL(Bundle.module.bundleURL))
+        let new = LocalizedStringResource("New Session…", bundle: .atURL(Bundle.module.bundleURL))
+        switch session.preferences.existingSessionAction {
+        case .ask:
+            Menu {
+                Button(add, action: session.imports.chooseVideos)
+                Button(new, action: openVideos)
+            } label: {
+                Label(LocalizedStringResource("Open Recordings…", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "plus")
+            }
+            .labelStyle(.iconOnly)
+            .help(Text("Open Recordings…", bundle: .module))
+        case .add:
+            Button(add, systemImage: "plus", action: session.imports.chooseVideos)
+                .labelStyle(.iconOnly)
+                .help(Text("Add Videos to Session…", bundle: .module))
+        case .replace:
+            Button(new, systemImage: "plus", action: openVideos)
+                .labelStyle(.iconOnly)
+                .help(Text("New Session…", bundle: .module))
+        }
+    }
+
+    private func drop(_ providers: [NSItemProvider], _ zone: DropZone) -> Bool {
+        Task { _ = drop(await fileURLs(of: providers), zone) }
+        return !providers.isEmpty
+    }
+
+    private func drop(_ urls: [URL], _ zone: DropZone) -> Bool {
+        switch zone {
+        case .add:
+            return session.imports.enqueueDroppedVideos(urls)
+        case .replace:
+            let videos = urls.filter(VideoImportQueue.supportsVideo)
+            guard !videos.isEmpty else { return false }
+            replaceVideos(videos)
+            return true
+        }
+    }
+
+    private func dropZone(_ zone: DropZone, _ title: Text, systemImage: String) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: systemImage).font(.system(size: 34))
+            title.font(.headline)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .foregroundStyle(StillsetStyle.accent)
+        .background(StillsetStyle.accent.opacity(hoveredZone == zone ? 0.12 : 0.04), in: .rect(cornerRadius: 18))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18)
+                .strokeBorder(StillsetStyle.accent, style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
+        }
+        .animation(reduceMotion ? nil : .smooth(duration: 0.18), value: hoveredZone)
+        .contentShape(.rect)
+        .onDrop(of: [.fileURL], delegate: VideoDropDelegate(token: dropToken, verifies: false, isTargeted: Binding(
+            get: { hoveredZone == zone },
+            set: { if $0 { hoveredZone = zone } else if hoveredZone == zone { hoveredZone = nil } }
+        )) { drop($0, zone) })
     }
 
     private var filtersMenu: some View {
@@ -62,12 +147,12 @@ public struct StillsetRootView: View {
             Divider()
             Picker(LocalizedStringResource("Organization", bundle: .atURL(Bundle.module.bundleURL)), selection: Binding(get: { session.groupsTimelineByScreen }, set: session.setTimelineGrouping)) {
                 Text("Chronology", bundle: .module).tag(false)
-                Text("By Screen", bundle: .module).tag(true)
+                Text("By screen", bundle: .module).tag(true)
             }.pickerStyle(.inline)
         } label: { Label(LocalizedStringResource("Filters", bundle: .atURL(Bundle.module.bundleURL)), systemImage: "line.3.horizontal.decrease") }
         .labelStyle(.iconOnly)
         .help(Text("Filters", bundle: .module))
-        .accessibilityValue("\(session.showsUniqueScreens ? String(localized: "Unique screenshots", bundle: .module) : String(localized: "All screenshots", bundle: .module)), \(session.groupsTimelineByScreen ? String(localized: "By Screen", bundle: .module) : String(localized: "Chronology", bundle: .module))")
+        .accessibilityValue("\(session.showsUniqueScreens ? String(localized: "Unique screenshots", bundle: .module) : String(localized: "All screenshots", bundle: .module)), \(session.groupsTimelineByScreen ? String(localized: "By screen", bundle: .module) : String(localized: "Chronology", bundle: .module))")
     }
 }
 
@@ -95,13 +180,13 @@ struct SessionStatusButton: View {
         .buttonBorderShape(.capsule)
         .controlSize(.regular)
         .tint(.primary)
-        .accessibilityLabel(LocalizedStringResource("Session Videos", bundle: .atURL(Bundle.module.bundleURL)))
+        .accessibilityLabel(LocalizedStringResource("Session videos", bundle: .atURL(Bundle.module.bundleURL)))
         .accessibilityValue(statusSummary)
-        .help(Text("Session Videos", bundle: .module))
+        .help(Text("Session videos", bundle: .module))
         .popover(isPresented: $showsStatus) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Session Videos", bundle: .module).font(.headline)
+                    Text("Session videos", bundle: .module).font(.headline)
                     VStack(spacing: 0) {
                         ForEach(Array(session.imports.models.enumerated()), id: \.element.id) { index, model in
                             if index > 0 { Divider() }
@@ -220,5 +305,49 @@ private struct VideoImportRow: View {
         case .failed: "exclamationmark.circle"
         case .cancelled: "xmark.circle"
         }
+    }
+}
+
+/// Invalidates in-flight drag verifications once the drag exits or drops.
+private final class DropToken { var value = 0 }
+
+@MainActor private func fileURLs(of providers: [NSItemProvider]) async -> [URL] {
+    var urls: [URL] = []
+    for provider in providers {
+        let url = await withCheckedContinuation { continuation in
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in continuation.resume(returning: url) }
+        }
+        if let url { urls.append(url) }
+    }
+    return urls
+}
+
+/// Reports a drag as targeted only when it carries a supported video, so images (e.g. exported captures) show no drop UI.
+private struct VideoDropDelegate: DropDelegate {
+    let token: DropToken
+    let verifies: Bool
+    let isTargeted: Binding<Bool>
+    let perform: ([NSItemProvider]) -> Bool
+
+    func dropEntered(info: DropInfo) {
+        token.value += 1
+        guard verifies else { return isTargeted.wrappedValue = true }
+        let generation = token.value
+        let providers = info.itemProviders(for: [.fileURL])
+        Task {
+            let urls = await fileURLs(of: providers)
+            if token.value == generation, urls.contains(where: VideoImportQueue.supportsVideo) { isTargeted.wrappedValue = true }
+        }
+    }
+
+    func dropExited(info: DropInfo) {
+        token.value += 1
+        isTargeted.wrappedValue = false
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        token.value += 1
+        isTargeted.wrappedValue = false
+        return perform(info.itemProviders(for: [.fileURL]))
     }
 }
