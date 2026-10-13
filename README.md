@@ -1,3 +1,8 @@
+
+
+
+
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/stillset-icon-dark.png">
@@ -17,6 +22,8 @@
   <a href="#how-it-works">How it works</a> ·
   <a href="#development">Development</a>
 </p>
+
+https://github.com/user-attachments/assets/bec0d5b5-dcbe-4fca-99b0-5f4056556594
 
 Stillset detects pauses and scroll stops in `.mov` and `.mp4` screen recordings
 and gathers them into a timeline. Review the captures and export the ones you
